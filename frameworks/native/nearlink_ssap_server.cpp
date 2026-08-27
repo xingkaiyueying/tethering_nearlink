@@ -483,6 +483,27 @@ NlErrCode SsapServer::AddService(SsapService &service)
 
         svc.properties_.push_back(std::move(p));
     }
+
+    for (auto &method : service.GetMethod()) {
+        size_t paramLen = 0;
+        const std::unique_ptr<uint8_t[]> &param = method.GetParameter(&paramLen);
+        std::vector<uint8_t> paramVec;
+        if (param && paramLen > 0) {
+            paramVec.assign(param.get(), param.get() + paramLen);
+        }
+        size_t resultLen = 0;
+        const std::unique_ptr<uint8_t[]> &result = method.GetResult(&resultLen);
+        std::vector<uint8_t> resultVec;
+        if (result && resultLen > 0) {
+            resultVec.assign(result.get(), result.get() + resultLen);
+        }
+        Method m(method.GetHandle(),
+            Uuid::ConvertFrom128Bits(method.GetUuid().ConvertTo128Bits()),
+            paramVec,
+            resultVec,
+            static_cast<uint32_t>(method.GetPermissions()));
+        svc.methods_.push_back(std::move(m));
+    }
     int appId = pimpl->applicationId_;
 
     sptr<INearlinkSsapServer> proxy = GetProxy<INearlinkSsapServer>(PROFILE_SSAP_SERVER);

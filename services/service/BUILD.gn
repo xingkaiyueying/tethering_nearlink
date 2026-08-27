@@ -68,6 +68,7 @@ config("nearlink_service_config") {
     "src/hadm",
     "src/hid",
     "src/ssap",
+    "src/ipshare",
     "src/controllerManager",
     "src/datatransfer",
     "src/dis",
@@ -149,6 +150,7 @@ ServiceSsapSrc = [
   "src/ssap/ssap_server_stack_adapter.cpp",
   "src/ssap/ssap_utils.cpp",
   "src/ssap/ssap_based_services_manager.cpp",
+  "src/ipshare/iposl_ssap_probe.cpp",
 ]
 
 ServiceHidSrc = [

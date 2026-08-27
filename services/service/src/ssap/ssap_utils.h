@@ -21,8 +21,11 @@
 #include "ssap_inner_def.h"
 #include "ssap_log.h"
 
+#include "ssap_data.h"
 #include "ssap_type.h"
 #include "nlstk_public_define.h"
+
+struct NLSTK_ServiceParam;
 
 namespace OHOS {
 namespace Nearlink {
@@ -30,6 +33,7 @@ SLE_Addr_S ConvertToSleAddr(const RawAddress &addr);
 NLSTK_SsapUuid_S ConvertToSleUuid(const Uuid &uuid);
 int ConvertFromPDUError(int errorCode);
 int ConvertStateFromStackSsapState(uint8_t state);
+bool FillMethodsToStackService(const Service &srcService, struct NLSTK_ServiceParam *dstService);
 } // namespace Nearlink
 } // namespace OHOS
 

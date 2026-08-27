@@ -16,7 +16,10 @@
 
 #include "ssap_def.h"
 #include "nlstk_ssap_app_link.h"
+#include "nlstk_ssap_app_server.h"
 #include "SleRemoteDeviceAdapter.h"
+#include "securec.h"
+#include "ssap_log.h"
 
 #define RANGE_STREAM_SIZE 4
 
@@ -46,6 +49,35 @@ int ConvertFromPDUError(int errorCode)
         return SsapStatus::SSAP_SUCCESS - errorCode;
     }
     return SsapStatus::SSAP_SUCCESS;
+}
+
+bool FillMethodsToStackService(const Service &srcService, NLSTK_ServiceParam_S *dstService)
+{
+    if (dstService == nullptr) {
+        SSAP_LOGE("dstService is nullptr");
+        return false;
+    }
+    uint32_t methodNum = static_cast<uint32_t>(srcService.methods_.size());
+    dstService->serviceMethodNum = static_cast<uint16_t>(methodNum);
+    dstService->method = nullptr;
+    if (methodNum == 0) {
+        return true;
+    }
+    dstService->method = new (std::nothrow) NLSTK_SsapServiceMethodParam_S[methodNum];
+    if (dstService->method == nullptr) {
+        SSAP_LOGE("method is nullptr");
+        return false;
+    }
+    (void)memset_s(dstService->method, sizeof(NLSTK_SsapServiceMethodParam_S) * methodNum, 0x00,
+        sizeof(NLSTK_SsapServiceMethodParam_S) * methodNum);
+    for (uint32_t i = 0; i < methodNum; i++) {
+        const Method &srcMethod = srcService.methods_[i];
+        dstService->method[i].type = (srcMethod.uuid_.GetUuidType() == Uuid::UUID16_BYTES_TYPE)
+            ? ITEM_TYPE_STD_METHOD : ITEM_TYPE_VENDOR_METHOD;
+        dstService->method[i].uuid = ConvertToSleUuid(srcMethod.uuid_);
+        dstService->method[i].permission.permissionValue = static_cast<uint8_t>(srcMethod.permission_);
+    }
+    return true;
 }
 
 int ConvertStateFromStackSsapState(uint8_t state)

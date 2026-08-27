@@ -966,6 +966,19 @@ TEST_F(UT_DTAP_TEST, DTAP_RegisterProtoRecvCbk_Success)
     EXPECT_EQ(ret, DTAP_SUCCESS);
 }
 
+TEST_F(UT_DTAP_TEST, DTAP_PI_IPV4_RegisterOnce)
+{
+    EXPECT_EQ(DTAP_PI_IPV4, 1);
+    EXPECT_LT(DTAP_PI_IPV4, DTAP_PI_MAX);
+    auto recvCb = [](DTAP_Data_Info *, SDF_Buff_S *) -> int {
+        return 0;
+    };
+    uint32_t ret = DTAP_RegisterProtoRecvCbk(DTAP_PI_IPV4, recvCb);
+    EXPECT_EQ(ret, DTAP_SUCCESS);
+    ret = DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV4);
+    EXPECT_EQ(ret, DTAP_SUCCESS);
+}
+
 TEST_F(UT_DTAP_TEST, DTAP_UnregisterProtoRecvCbk_NotInited)
 {
     uint32_t ret;

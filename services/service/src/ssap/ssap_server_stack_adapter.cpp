@@ -575,6 +575,11 @@ void SsapServerStackAdapter::AddService(int appId, Service &service)
         OnAddServiceTask(appId, service, SsapStatus::SSAP_FAILURE);
         return;
     }
+    if (!FillMethodsToStackService(service, &stackService)) {
+        FreeStackService(&stackService);
+        OnAddServiceTask(appId, service, SsapStatus::SSAP_FAILURE);
+        return;
+    }
 
     NLSTK_Errcode_E ret = NLSTK_SsapServerAddService(appId, &stackService);
     if (ret != NLSTK_ERRCODE_SUCCESS) {

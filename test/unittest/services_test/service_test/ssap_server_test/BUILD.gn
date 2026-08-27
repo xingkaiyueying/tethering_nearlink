@@ -23,11 +23,13 @@ config("nl_ssap_server_service_unit_test_config") {
     "$NEARLINK_ROOT/services/service/src/util",
     "$NEARLINK_ROOT/services/service/src/adapter",
     "$NEARLINK_ROOT/services/service/src/ssap",
+    "$NEARLINK_ROOT/services/service/src/ipshare",
     "$NEARLINK_ROOT/services/service/src/common",
     "$NEARLINK_ROOT/services/service/src/base",
     "$NEARLINK_ROOT/services/service/src/lis",
     "$NEARLINK_ROOT/services/server/include",
     "$NEARLINK_ROOT/services/ipc/include",
+    "$NEARLINK_ROOT/services/stack/src/cp/bsl/sle/servm/ssap/include",
     "$NEARLINK_ROOT/test/unittest/mock",
   ]
 
@@ -83,6 +85,7 @@ ohos_unittest("nl_ssap_server_service_test") {
 
   sources = [
     "$NEARLINK_ROOT/test/unittest/services_test/service_test/ssap_server_test/ssap_server_service_test.cpp",
+    "$NEARLINK_ROOT/test/unittest/services_test/service_test/ssap_server_test/iposl_ssap_probe_test.cpp",
   ]
   sources += [ "$MOCK_HOST_SERVER_FILE_TDD/mock_nearlink_host_server.cpp" ]
 

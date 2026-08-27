@@ -39,12 +39,14 @@ config("common_test_config") {
 unit_test_deps = [
   "$NEARLINK_ROOT/utils:nearlink_utils",
   "$NEARLINK_ROOT/socket:nearlink_socket",
+  "$NEARLINK_ROOT/frameworks/native:nearlink_framework",
   "${nearlink_test_utils_path}:test_utils_static",
 ]
 
 unit_test_external_deps = [
   "c_utils:utils",
   "hilog:libhilog",
+  "ipc:ipc_core",
   "ffrt:libffrt",
   "googletest:gtest_main",
 ]
@@ -74,6 +76,7 @@ ohos_unittest("nl_common_test") {
     "$NL_UNIT_TEST_DIR/common_test/nearlink_datatransfer_parcel_test.cpp",
     "$NL_UNIT_TEST_DIR/common_test/nearlink_socket_manager_test.cpp",
     "$NL_UNIT_TEST_DIR/common_test/nearlink_utils_test.cpp",
+    "$NL_UNIT_TEST_DIR/common_test/iposl_demo_uuid_test.cpp",
   ]
 
   configs = [ ":common_test_config" ]
