@@ -117,6 +117,7 @@ private:
     bool FillDescriptorToProperty(
         const Property &srcProperty, NLSTK_SsapServicePropertyParam_S *dstProperty);
     bool FillPropertyToService(const Service &srcService, NLSTK_ServiceParam_S *dstService);
+    bool FillMethodToService(const Service &srcService, NLSTK_ServiceParam_S *dstService);
     void FreeStackServiceStatement(NLSTK_SsapServiceStatementParam_S *serviceStatement);
     void FreeStackDescriptor(NLSTK_SsapServiceDescriptorParam_S *descriptors, uint32_t descriptorNum);
     void FreeStackProperty(NLSTK_SsapServicePropertyParam_S *property, uint16_t servicePropertyNum);

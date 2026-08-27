@@ -484,6 +484,29 @@ bool SsapServerStackAdapter::FillPropertyToService(const Service &srcService, NL
     return true;
 }
 
+bool SsapServerStackAdapter::FillMethodToService(const Service &srcService, NLSTK_ServiceParam_S *dstService)
+{
+    NL_CHECK_RETURN_RET(dstService != nullptr, false, "dstService is nullptr");
+    uint32_t serviceMethodNum = srcService.methods_.size();
+    dstService->serviceMethodNum = serviceMethodNum;
+    if (serviceMethodNum == 0) {
+        return true;
+    }
+
+    dstService->method = new (std::nothrow) NLSTK_SsapServiceMethodParam_S[serviceMethodNum];
+    NL_CHECK_RETURN_RET(dstService->method != nullptr, false, "method is nullptr");
+    (void)memset_s(dstService->method, sizeof(NLSTK_SsapServiceMethodParam_S) * serviceMethodNum, 0x00,
+        sizeof(NLSTK_SsapServiceMethodParam_S) * serviceMethodNum);
+    for (uint32_t i = 0; i < serviceMethodNum; i++) {
+        const Method &method = srcService.methods_[i];
+        dstService->method[i].type = method.uuid_.GetUuidType() == Uuid::UUID16_BYTES_TYPE ?
+            ITEM_TYPE_STD_METHOD : ITEM_TYPE_VENDOR_METHOD;
+        dstService->method[i].uuid = ConvertToSleUuid(method.uuid_);
+        dstService->method[i].permission.permissionValue = method.permission_;
+    }
+    return true;
+}
+
 void SsapServerStackAdapter::FreeStackServiceStatement(NLSTK_SsapServiceStatementParam_S *serviceStatement)
 {
     NL_CHECK_RETURN(serviceStatement != nullptr, "serviceStatement is nullptr");
@@ -571,6 +594,11 @@ void SsapServerStackAdapter::AddService(int appId, Service &service)
     stackService.serviceStatement.uuid = ConvertToSleUuid(service.uuid_);
 
     if (!FillPropertyToService(service, &stackService)) {
+        FreeStackService(&stackService);
+        OnAddServiceTask(appId, service, SsapStatus::SSAP_FAILURE);
+        return;
+    }
+    if (!FillMethodToService(service, &stackService)) {
         FreeStackService(&stackService);
         OnAddServiceTask(appId, service, SsapStatus::SSAP_FAILURE);
         return;

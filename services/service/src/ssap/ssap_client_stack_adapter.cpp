@@ -513,6 +513,7 @@ Method SsapClientStackAdapter::BuildMethodStructByStackMethod(NLSTK_SsapPrty_S *
 {
     NL_CHECK_RETURN_RET(stackMethod != nullptr, Method(), "stackMethod is nullptr");
     Method method(stackMethod->handle, Uuid::ConvertFromBytesSle(stackMethod->uuid.uuid));
+    method.permission_ = stackMethod->permission.permissionValue;
     SSAP_LOGI("method.uuid=%{public}s", method.uuid_.GetEncryptUuid().c_str());
     return method;
 }
@@ -797,4 +798,3 @@ void SsapClientStackAdapter::Disconnect(int appId, const RawAddress &addr)
 
 } // namespace Nearlink
 } // namespace OHOS
-

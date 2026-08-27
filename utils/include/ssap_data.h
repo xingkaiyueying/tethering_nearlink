@@ -85,7 +85,7 @@ struct Method  {
 
     Method(uint16_t handle, const Uuid &uuid, const std::vector<uint8_t> &parameter,
         const std::vector<uint8_t> &result, uint32_t permission)
-        : handle_(handle), uuid_(uuid), parameter_(parameter), result_(result), permission_(0) {}
+        : handle_(handle), uuid_(uuid), parameter_(parameter), result_(result), permission_(permission) {}
 
     uint16_t handle_;
     Uuid uuid_;

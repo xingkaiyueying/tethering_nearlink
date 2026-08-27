@@ -96,6 +96,7 @@ ohos_unittest("nl_native_test") {
     "$NL_UNIT_TEST_DIR/native_test/nearlink_sle_scanner_test.cpp",
     "$NL_UNIT_TEST_DIR/native_test/nearlink_remote_device_test.cpp",
     "$NL_UNIT_TEST_DIR/native_test/nearlink_ssap_server_test.cpp",
+    "$NL_UNIT_TEST_DIR/native_test/nearlink_ipshare_uuid_test.cpp",
     "$NL_UNIT_TEST_DIR/native_test/nearlink_tws_client_test.cpp",
     "$NL_UNIT_TEST_DIR/native_test/nearlink_cdsm_client_test.cpp",
     "$NL_UNIT_TEST_DIR/native_test/nearlink_sle_ranging_test.cpp",

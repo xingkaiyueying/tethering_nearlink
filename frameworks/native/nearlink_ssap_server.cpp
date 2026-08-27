@@ -320,6 +320,20 @@ std::shared_ptr<SsapService> SsapServer::impl::BuildService(const NearlinkSsapSe
         ssapService->AddProperty(std::move(ssapProperty));
     }
 
+    for (auto &method : service.methods_) {
+        SsapMethod ssapMethod(method.handle_,
+            method.uuid_.GetUuidType() == Uuid::UUID16_BYTES_TYPE ?
+                SsapMethod::MethodType::ENTRY_TYPE_METHOD : SsapMethod::MethodType::ENTRY_TYPE_VENDOR_METHOD,
+            UUID::ConvertFrom128Bits(method.uuid_.ConvertTo128Bits()), method.permission_);
+        if (!method.parameter_.empty()) {
+            ssapMethod.SetParameter(method.parameter_.data(), method.parameter_.size());
+        }
+        if (!method.result_.empty()) {
+            ssapMethod.SetResult(method.result_.data(), method.result_.size());
+        }
+        ssapService->AddMethod(std::move(ssapMethod));
+    }
+
     return ssapService;
 }
 
@@ -482,6 +496,26 @@ NlErrCode SsapServer::AddService(SsapService &service)
         }
 
         svc.properties_.push_back(std::move(p));
+    }
+
+    for (auto &method : service.GetMethod()) {
+        size_t parameterLength = 0;
+        const auto &parameter = method.GetParameter(&parameterLength);
+        std::vector<uint8_t> parameterValue;
+        if (parameter != nullptr && parameterLength != 0) {
+            parameterValue.assign(parameter.get(), parameter.get() + parameterLength);
+        }
+
+        size_t resultLength = 0;
+        const auto &result = method.GetResult(&resultLength);
+        std::vector<uint8_t> resultValue;
+        if (result != nullptr && resultLength != 0) {
+            resultValue.assign(result.get(), result.get() + resultLength);
+        }
+
+        svc.methods_.emplace_back(method.GetHandle(),
+            Uuid::ConvertFrom128Bits(method.GetUuid().ConvertTo128Bits()),
+            parameterValue, resultValue, method.GetPermissions());
     }
     int appId = pimpl->applicationId_;
 

@@ -111,9 +111,11 @@ bool NearlinkSsapMethodParcel::ReadFromParcel(Parcel &parcel)
     }
     result_ = std::move(result);
     HILOGI("result_ size:%{public}lu", result_.size());
-    if (!parcel.ReadUint16(permission_)) {
+    int32_t permission = 0;
+    if (!parcel.ReadInt32(permission)) {
         return false;
     }
+    permission_ = static_cast<uint16_t>(permission);
     return true;
 }
 }  // namespace Nearlink
