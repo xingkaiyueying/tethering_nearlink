@@ -113,10 +113,15 @@ void ProfileServiceManager::Start() const
     LOG_INFO("start");
 
     if (SleServiceManager::GetInstance()->GetAdapter(SleTransport::ADAPTER_SLE)) {
-        if (NearlinkIpShareService::GetInstance().Initialize() != 0) {
-            HILOGE("[IpShare] initialize failed");
+        int32_t ret = NearlinkIpShareService::GetInstance().Initialize();
+        if (ret != 0) {
+            HILOGE("[IpShare][Profile] initialize failed during service start ret=%{public}d", ret);
+        } else {
+            HILOGI("[IpShare][Profile] initialize completed during service start");
         }
         CreateSleProfileServices();
+    } else {
+        HILOGE("[IpShare][Profile] initialize skipped: SLE adapter unavailable");
     }
 }
 
@@ -154,6 +159,7 @@ void ProfileServiceManager::Stop() const
 {
     LOG_INFO("start");
 
+    HILOGI("[IpShare][Profile] shutdown started");
     NearlinkIpShareService::GetInstance().Shutdown();
 
     for (auto &sp : GET_SUPPORT_PROFILES()) {
@@ -171,6 +177,7 @@ void ProfileServiceManager::Stop() const
 
     pimpl->startedProfiles_.Clear();
     pimpl->profilesState_.Clear();
+    HILOGI("[IpShare][Profile] shutdown completed");
 }
 
 SleInterfaceProfile *ProfileServiceManager::GetProfileService(const std::string &name) const
@@ -205,8 +212,13 @@ void ProfileServiceManager::OnAllEnabled(const SleTransport transport) const
 {
     LOG_INFO("%{public}d", transport);
 
-    if (transport == SleTransport::ADAPTER_SLE && NearlinkIpShareService::GetInstance().Initialize() != 0) {
-        HILOGE("[IpShare] reinitialize failed");
+    if (transport == SleTransport::ADAPTER_SLE) {
+        int32_t ret = NearlinkIpShareService::GetInstance().Initialize();
+        if (ret != 0) {
+            HILOGE("[IpShare][Profile] reinitialize failed ret=%{public}d", ret);
+        } else {
+            HILOGI("[IpShare][Profile] reinitialize completed");
+        }
     }
 
     if (pimpl->startedProfiles_.IsEmpty(transport) ||

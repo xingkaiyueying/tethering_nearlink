@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "ipc_types.h"
+#include "log.h"
 #include "nearlink_errorcode.h"
 #include "nearlink_service_ipc_interface_code.h"
 
@@ -21,10 +22,15 @@ int32_t NearlinkIpShareProxy::Transact(uint32_t code, MessageParcel &data, Messa
 {
     auto remote = Remote();
     if (remote == nullptr) {
+        HILOGE("[IpShare][IPC] transact failed: remote is null code=%{public}u", code);
         return NL_ERR_UNAVAILABLE_PROXY;
     }
     MessageOption option(MessageOption::TF_SYNC);
-    return remote->SendRequest(code, data, reply, option) == NO_ERROR ? NL_NO_ERROR : NL_ERR_IPC_TRANS_FAILED;
+    int32_t ret = remote->SendRequest(code, data, reply, option) == NO_ERROR ? NL_NO_ERROR : NL_ERR_IPC_TRANS_FAILED;
+    if (ret != NL_NO_ERROR) {
+        HILOGE("[IpShare][IPC] transact failed code=%{public}u ret=%{public}d", code, ret);
+    }
+    return ret;
 }
 
 int32_t NearlinkIpShareProxy::AddressCommand(uint32_t code, const std::string &address)
@@ -32,10 +38,13 @@ int32_t NearlinkIpShareProxy::AddressCommand(uint32_t code, const std::string &a
     MessageParcel data;
     MessageParcel reply;
     if (!data.WriteInterfaceToken(GetDescriptor()) || !data.WriteString(address)) {
+        HILOGE("[IpShare][IPC] address request marshal failed code=%{public}u", code);
         return NL_ERR_IPC_TRANS_FAILED;
     }
     int32_t ret = Transact(code, data, reply);
-    return ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
+    ret = ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
+    HILOGI("[IpShare][IPC] address request completed code=%{public}u ret=%{public}d", code, ret);
+    return ret;
 }
 
 int32_t NearlinkIpShareProxy::IsPeerSupported(const std::string &peerAddress, bool &supported)
@@ -43,6 +52,7 @@ int32_t NearlinkIpShareProxy::IsPeerSupported(const std::string &peerAddress, bo
     MessageParcel data;
     MessageParcel reply;
     if (!data.WriteInterfaceToken(GetDescriptor()) || !data.WriteString(peerAddress)) {
+        HILOGE("[IpShare][IPC] support request marshal failed");
         return NL_ERR_IPC_TRANS_FAILED;
     }
     int32_t ret = Transact(NL_IPSHARE_IS_PEER_SUPPORTED, data, reply);
@@ -51,8 +61,10 @@ int32_t NearlinkIpShareProxy::IsPeerSupported(const std::string &peerAddress, bo
     }
     ret = reply.ReadInt32();
     if (ret == NL_NO_ERROR && !reply.ReadBool(supported)) {
+        HILOGE("[IpShare][IPC] support response unmarshal failed");
         return NL_ERR_IPC_TRANS_FAILED;
     }
+    HILOGI("[IpShare][IPC] support request completed ret=%{public}d supported=%{public}d", ret, supported);
     return ret;
 }
 
@@ -71,10 +83,13 @@ int32_t NearlinkIpShareProxy::Stop()
     MessageParcel data;
     MessageParcel reply;
     if (!data.WriteInterfaceToken(GetDescriptor())) {
+        HILOGE("[IpShare][IPC] stop request marshal failed");
         return NL_ERR_IPC_TRANS_FAILED;
     }
     int32_t ret = Transact(NL_IPSHARE_STOP, data, reply);
-    return ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
+    ret = ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
+    HILOGI("[IpShare][IPC] stop request completed ret=%{public}d", ret);
+    return ret;
 }
 
 int32_t NearlinkIpShareProxy::GetStatus(NearlinkIpShareStatus &status)
@@ -82,36 +97,46 @@ int32_t NearlinkIpShareProxy::GetStatus(NearlinkIpShareStatus &status)
     MessageParcel data;
     MessageParcel reply;
     if (!data.WriteInterfaceToken(GetDescriptor())) {
+        HILOGE("[IpShare][IPC] status request marshal failed");
         return NL_ERR_IPC_TRANS_FAILED;
     }
     int32_t ret = Transact(NL_IPSHARE_GET_STATUS, data, reply);
     if (ret != NL_NO_ERROR) {
+        HILOGE("[IpShare][IPC] status request failed ret=%{public}d", ret);
         return ret;
     }
     ret = reply.ReadInt32();
     if (ret != NL_NO_ERROR) {
+        HILOGE("[IpShare][IPC] status response failed ret=%{public}d", ret);
         return ret;
     }
     std::shared_ptr<NearlinkIpShareStatus> result(reply.ReadParcelable<NearlinkIpShareStatus>());
     if (result == nullptr) {
+        HILOGE("[IpShare][IPC] status response unmarshal failed");
         return NL_ERR_IPC_TRANS_FAILED;
     }
     status = *result;
+    HILOGI("[IpShare][IPC] status completed role=%{public}d state=%{public}d error=%{public}d",
+        static_cast<int32_t>(status.role), static_cast<int32_t>(status.state), status.errorCode);
     return NL_NO_ERROR;
 }
 
 int32_t NearlinkIpShareProxy::RegisterObserver(const sptr<INearlinkIpShareObserver> &observer)
 {
     if (observer == nullptr) {
+        HILOGE("[IpShare][IPC] observer registration failed: observer is null");
         return NL_ERR_INVALID_PARAM;
     }
     MessageParcel data;
     MessageParcel reply;
     if (!data.WriteInterfaceToken(GetDescriptor()) || !data.WriteRemoteObject(observer->AsObject())) {
+        HILOGE("[IpShare][IPC] observer registration marshal failed");
         return NL_ERR_IPC_TRANS_FAILED;
     }
     int32_t ret = Transact(NL_IPSHARE_REGISTER_OBSERVER, data, reply);
-    return ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
+    ret = ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
+    HILOGI("[IpShare][IPC] observer registration completed ret=%{public}d", ret);
+    return ret;
 }
 
 int32_t NearlinkIpShareProxy::UnregisterObserver()
@@ -119,10 +144,13 @@ int32_t NearlinkIpShareProxy::UnregisterObserver()
     MessageParcel data;
     MessageParcel reply;
     if (!data.WriteInterfaceToken(GetDescriptor())) {
+        HILOGE("[IpShare][IPC] observer unregistration marshal failed");
         return NL_ERR_IPC_TRANS_FAILED;
     }
     int32_t ret = Transact(NL_IPSHARE_UNREGISTER_OBSERVER, data, reply);
-    return ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
+    ret = ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
+    HILOGI("[IpShare][IPC] observer unregistration completed ret=%{public}d", ret);
+    return ret;
 }
 
 }  // namespace OHOS::Nearlink

@@ -32,18 +32,23 @@ int32_t NearlinkIpShareChannel::Initialize(const StateCallback &callback)
     std::lock_guard<std::mutex> lock(mutex_);
     if (initialized_) {
         callback_ = callback;
+        HILOGI("[IpShare][Channel] initialize updated callback for active channel");
         return 0;
     }
-    if (DTAP_RegisterProtoRecvCbk(DTAP_PI_IPV4, &NearlinkIpShareChannel::OnIpv4Received) != 0) {
+    int32_t ret = DTAP_RegisterProtoRecvCbk(DTAP_PI_IPV4, &NearlinkIpShareChannel::OnIpv4Received);
+    if (ret != 0) {
+        HILOGE("[IpShare][Channel] initialize failed: DTAP IPv4 callback registration ret=%{public}d", ret);
         return -1;
     }
     callback_ = callback;
     initialized_ = true;
+    HILOGI("[IpShare][Channel] initialize completed: DTAP IPv4 callback registered");
     return 0;
 }
 
 void NearlinkIpShareChannel::Deinitialize()
 {
+    HILOGI("[IpShare][Channel] deinitialize started");
     Close();
     std::lock_guard<std::mutex> lock(mutex_);
     if (initialized_) {
@@ -51,15 +56,23 @@ void NearlinkIpShareChannel::Deinitialize()
     }
     initialized_ = false;
     callback_ = nullptr;
+    HILOGI("[IpShare][Channel] deinitialize completed");
 }
 
 int32_t NearlinkIpShareChannel::CreateTun()
 {
-    return tun_.Open([this](const uint8_t *data, uint16_t length) {
+    HILOGI("[IpShare][Channel] create TUN requested");
+    int32_t ret = tun_.Open([this](const uint8_t *data, uint16_t length) {
         if (Send(data, length) != 0) {
-            HILOGW("[IpShare] drop outbound IPv4 packet");
+            HILOGW("[IpShare][Channel] drop outbound IPv4 packet");
         }
     });
+    if (ret != 0) {
+        HILOGE("[IpShare][Channel] create TUN failed ret=%{public}d", ret);
+        return ret;
+    }
+    HILOGI("[IpShare][Channel] create TUN completed");
+    return 0;
 }
 
 void NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressType)
@@ -67,19 +80,25 @@ void NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressType)
     std::lock_guard<std::mutex> lock(mutex_);
     if (peer != nullptr) {
         (void)memcpy(peer_, peer, sizeof(peer_));
+    } else {
+        HILOGE("[IpShare][Channel] peer update ignored: peer is null");
     }
     addressType_ = addressType;
+    HILOGI("[IpShare][Channel] peer context updated addressType=%{public}u", addressType);
 }
 
 int32_t NearlinkIpShareChannel::Open(const uint8_t peer[6], uint8_t addressType)
 {
     if (peer == nullptr) {
+        HILOGE("[IpShare][Channel] open rejected: peer is null");
         return -1;
     }
     QOSM_TransChannelParams_S params = {};
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!initialized_ || channelPending_ || channelEstablished_) {
+            HILOGE("[IpShare][Channel] open rejected initialized=%{public}d pending=%{public}d established=%{public}d",
+                initialized_, channelPending_, channelEstablished_);
             return -1;
         }
         (void)memcpy(peer_, peer, sizeof(peer_));
@@ -95,11 +114,16 @@ int32_t NearlinkIpShareChannel::Open(const uint8_t peer[6], uint8_t addressType)
         params.tcConf.mode = TRANSPORT_MODE_BASIC;
         channelPending_ = true;
     }
-    if (QOSM_TransChannelCreate(&params) != 0) {
+    HILOGI("[IpShare][Channel] QoSM create submitted port=%{public}u addressType=%{public}u", IP_SHARE_PORT,
+        addressType);
+    int32_t ret = QOSM_TransChannelCreate(&params);
+    if (ret != 0) {
         std::lock_guard<std::mutex> lock(mutex_);
         channelPending_ = false;
+        HILOGE("[IpShare][Channel] QoSM create failed ret=%{public}d", ret);
         return -1;
     }
+    HILOGI("[IpShare][Channel] QoSM create accepted; awaiting channel status");
     return 0;
 }
 
@@ -122,15 +146,22 @@ void NearlinkIpShareChannel::Close()
         dhcpBound_ = false;
     }
     if (destroy) {
-        (void)QOSM_TransChannelDestroy(&release);
+        int32_t ret = QOSM_TransChannelDestroy(&release);
+        if (ret != 0) {
+            HILOGE("[IpShare][Channel] QoSM destroy failed tcid=%{public}u ret=%{public}d", release.tcid, ret);
+        } else {
+            HILOGI("[IpShare][Channel] QoSM destroy completed tcid=%{public}u", release.tcid);
+        }
     }
     tun_.Close();
+    HILOGI("[IpShare][Channel] channel and TUN closed");
 }
 
 void NearlinkIpShareChannel::SetDhcpBound(bool bound)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     dhcpBound_ = bound;
+    HILOGI("[IpShare][Channel] DHCP binding state=%{public}d", bound);
 }
 
 bool NearlinkIpShareChannel::IsIpSharePort(uint16_t port)
@@ -186,8 +217,19 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
             error = -1;
         }
     }
+    if (established) {
+        HILOGI("[IpShare][Channel] QoSM status established lcid=%{public}u tcid=%{public}u",
+            params->lcid, params->tcid);
+    } else if (error != 0) {
+        HILOGE("[IpShare][Channel] QoSM status failed status=%{public}d lcid=%{public}u tcid=%{public}u",
+            params->status, params->lcid, params->tcid);
+    } else {
+        HILOGI("[IpShare][Channel] QoSM status received status=%{public}d", params->status);
+    }
     if (callback) {
         callback(established, error);
+    } else {
+        HILOGE("[IpShare][Channel] QoSM status dropped: state callback is null");
     }
     return true;
 }
@@ -200,6 +242,7 @@ int NearlinkIpShareChannel::OnIpv4Received(DTAP_Data_Info_S *info, SDF_Buff_S *b
 int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
 {
     if (info == nullptr || buffer == nullptr || info->pi != DTAP_PI_IPV4) {
+        HILOGE("[IpShare][Channel] inbound packet rejected: invalid DTAP input");
         return -1;
     }
     const uint8_t *data = SDF_DataOffset(buffer);
@@ -208,14 +251,23 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!channelEstablished_ || info->lcid != lcid_ || info->tcid != tcid_ || dataLen > UINT16_MAX) {
+            HILOGW("[IpShare][Channel] inbound packet rejected: channel mismatch lcid=%{public}u tcid=%{public}u "
+                "length=%{public}u", info->lcid, info->tcid, dataLen);
             return -1;
         }
         bound = dhcpBound_;
     }
     if (!ValidateIpv4(data, static_cast<uint16_t>(dataLen), bound)) {
+        HILOGW("[IpShare][Channel] inbound packet rejected: IPv4 policy length=%{public}u dhcpBound=%{public}d",
+            dataLen, bound);
         return -1;
     }
-    return tun_.Write(data, static_cast<uint16_t>(dataLen));
+    int32_t ret = tun_.Write(data, static_cast<uint16_t>(dataLen));
+    if (ret != 0) {
+        HILOGE("[IpShare][Channel] inbound packet delivery to TUN failed ret=%{public}d length=%{public}u", ret,
+            dataLen);
+    }
+    return ret;
 }
 
 int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
@@ -226,6 +278,7 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!channelEstablished_) {
+            HILOGW("[IpShare][Channel] outbound packet rejected: QoSM channel not established");
             return -1;
         }
         lcid = lcid_;
@@ -233,21 +286,28 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
         bound = dhcpBound_;
     }
     if (!ValidateIpv4(data, length, bound)) {
+        HILOGW("[IpShare][Channel] outbound packet rejected: IPv4 policy length=%{public}u dhcpBound=%{public}d",
+            length, bound);
         return -1;
     }
     SDF_Buff_S *buffer = SDF_BuffNewWithReserve(length);
     if (buffer == nullptr) {
+        HILOGE("[IpShare][Channel] outbound packet failed: buffer allocation length=%{public}u", length);
         return -1;
     }
     uint8_t *payload = SDF_BuffAppend(buffer, length);
     if (payload == nullptr) {
         SDF_BuffFree(buffer);
+        HILOGE("[IpShare][Channel] outbound packet failed: buffer append length=%{public}u", length);
         return -1;
     }
     (void)memcpy(payload, data, length);
     DTAP_Data_S packet = {.pi = DTAP_PI_IPV4, .lcid = lcid, .tcid = tcid, .buff = buffer};
-    if (DTAP_DataSend(&packet) != 0) {
+    int32_t ret = DTAP_DataSend(&packet);
+    if (ret != 0) {
         SDF_BuffFree(buffer);
+        HILOGE("[IpShare][Channel] outbound packet send failed lcid=%{public}u tcid=%{public}u ret=%{public}d",
+            lcid, tcid, ret);
         return -1;
     }
     return 0;

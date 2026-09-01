@@ -1217,6 +1217,7 @@ void SleDataTransferService::SendDataStateCallback(const SLE_Addr_S *devAddr, ui
 bool SleDataTransferService::CheckChannelParamCallback(uint16_t srcPort)
 {
     if (NearlinkIpShareChannel::IsAcceptingPort(srcPort)) {
+        HILOGI("[IpShare][DataTransfer] accepted IPoSL QoSM channel port=%{public}u", srcPort);
         return true;
     }
     return SleDataTransferService::GetInstance().IsValidSrcPort(srcPort);
@@ -1236,6 +1237,8 @@ void SleDataTransferService::ChannelStatusCallback(const QOSM_TransChannelRspPar
     HILOGD("dt channel cb");
     NL_CHECK_RETURN(respParams, "stack dt channel cb null");
     if (NearlinkIpShareChannel::HandleChannelStatus(respParams)) {
+        HILOGI("[IpShare][DataTransfer] dispatched IPoSL channel status=%{public}d lcid=%{public}u tcid=%{public}u",
+            respParams->status, respParams->lcid, respParams->tcid);
         return;
     }
     RawAddress rawAddress(RawAddress::ConvertToString(respParams->addr.addr));

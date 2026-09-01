@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "iposl_codec.h"
+#include "nlstk_log.h"
 #include "nlstk_ssap_app_server.h"
 
 static const uint8_t g_identifierUuid[16] = {
@@ -66,8 +67,13 @@ static int32_t AddIdentifierService(void)
     NLSTK_ServiceParam_S service = {0};
     SetUuid(&service.serviceStatement.uuid, g_identifierUuid);
     service.serviceStatement.serviceType = ITEM_TYPE_VENDOR_PRIMARY_SERVICE;
-    return NLSTK_SsapServerAddService(g_serverAppId, &service) == NLSTK_ERRCODE_SUCCESS ?
-        IPOSL_SUCCESS : IPOSL_ERR_SSAP;
+    NLSTK_Errcode_E ret = NLSTK_SsapServerAddService(g_serverAppId, &service);
+    if (ret != NLSTK_ERRCODE_SUCCESS) {
+        NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] identifier service add failed appId=%d ret=%d", g_serverAppId, ret);
+        return IPOSL_ERR_SSAP;
+    }
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Server] identifier service added appId=%d", g_serverAppId);
+    return IPOSL_SUCCESS;
 }
 
 static int32_t AddConfigService(void)
@@ -94,8 +100,14 @@ static int32_t AddConfigService(void)
     service.property = properties;
     service.serviceMethodNum = 1;
     service.method = &method;
-    return NLSTK_SsapServerAddService(g_serverAppId, &service) == NLSTK_ERRCODE_SUCCESS ?
-        IPOSL_SUCCESS : IPOSL_ERR_SSAP;
+    NLSTK_Errcode_E ret = NLSTK_SsapServerAddService(g_serverAppId, &service);
+    if (ret != NLSTK_ERRCODE_SUCCESS) {
+        NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] configuration service add failed appId=%d ret=%d", g_serverAppId,
+            ret);
+        return IPOSL_ERR_SSAP;
+    }
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Server] configuration service added appId=%d", g_serverAppId);
+    return IPOSL_SUCCESS;
 }
 
 static void OnCallMethod(int32_t appId, uint16_t requestId, NLSTK_SsapServerCallMethodRequestInfo_S *method,
@@ -105,9 +117,21 @@ static void OnCallMethod(int32_t appId, uint16_t requestId, NLSTK_SsapServerCall
     uint8_t layer2[IPOSL_LAYER2_ID_LEN] = {0};
     uint8_t response[IPOSL_RESPONSE_LEN] = {0};
     uint8_t result = 0xFF;
-    bool accepted = g_serverActive && appId == g_serverAppId && method != NULL && IsExpectedPeer(&method->addr) &&
-        memcmp(method->uuid.uuid, g_methodUuid, sizeof(g_methodUuid)) == 0 &&
-        IposlCodecDecodeRequest(method->param.data, method->param.len, &opcode, layer2) == IPOSL_SUCCESS;
+    bool appMatch = appId == g_serverAppId;
+    bool peerMatch = method != NULL && IsExpectedPeer(&method->addr);
+    bool methodMatch = method != NULL && memcmp(method->uuid.uuid, g_methodUuid, sizeof(g_methodUuid)) == 0;
+    int32_t decodeRet = method == NULL ? IPOSL_ERR_INVALID_PARAM :
+        IposlCodecDecodeRequest(method->param.data, method->param.len, &opcode, layer2);
+    bool accepted = g_serverActive && appMatch && method != NULL && peerMatch && methodMatch &&
+        decodeRet == IPOSL_SUCCESS;
+    if (!accepted) {
+        NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] method rejected requestId=%u appId=%d active=%d appMatch=%d "
+            "method=%d peerMatch=%d methodMatch=%d decodeRet=%d", requestId, appId, g_serverActive, appMatch,
+            method != NULL, peerMatch, methodMatch, decodeRet);
+    } else {
+        NLSTK_LOG_INFO("[IpShare][IPoSL][Server] method request accepted requestId=%u appId=%d opcode=%u", requestId,
+            appId, opcode);
+    }
     if (accepted && opcode == IPOSL_OPCODE_CONFIGURE &&
         memcmp(layer2, g_expectedPeer, sizeof(g_expectedPeer)) == 0) {
         (void)memcpy(g_configuredLayer2, layer2, sizeof(g_configuredLayer2));
@@ -120,20 +144,43 @@ static void OnCallMethod(int32_t appId, uint16_t requestId, NLSTK_SsapServerCall
     if (method != NULL && IposlCodecEncodeResponse(opcode, layer2, result, response, sizeof(response)) > 0 &&
         needReturn) {
         NLSTK_VariableData_S value = {.len = sizeof(response), .data = response};
-        (void)NLSTK_SsapServerSendMethodCallRes(g_serverAppId, requestId, &value);
+        NLSTK_Errcode_E sendRet = NLSTK_SsapServerSendMethodCallRes(g_serverAppId, requestId, &value);
+        if (sendRet != NLSTK_ERRCODE_SUCCESS) {
+            NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] method response send failed requestId=%u opcode=%u result=%u "
+                "ret=%d", requestId, opcode, result, sendRet);
+        } else {
+            NLSTK_LOG_INFO("[IpShare][IPoSL][Server] method response sent requestId=%u opcode=%u result=%u",
+                requestId, opcode, result);
+        }
     } else if (needAuth) {
-        (void)NLSTK_SsapServerAuthorizeResult(g_serverAppId, requestId, result == 0);
+        NLSTK_Errcode_E authRet = NLSTK_SsapServerAuthorizeResult(g_serverAppId, requestId, result == 0);
+        if (authRet != NLSTK_ERRCODE_SUCCESS) {
+            NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] authorization response failed requestId=%u ret=%d", requestId,
+                authRet);
+        } else {
+            NLSTK_LOG_INFO("[IpShare][IPoSL][Server] authorization response sent requestId=%u allow=%d", requestId,
+                result == 0);
+        }
+    } else {
+        NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] method response not sent requestId=%u needReturn=%d needAuth=%d",
+            requestId, needReturn, needAuth);
     }
     if (result == 0 && opcode == IPOSL_OPCODE_CONFIGURE) {
         const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
         if (callbacks != NULL && callbacks->onConfigured != NULL) {
             callbacks->onConfigured(g_expectedPeer, false, IPOSL_SUCCESS);
+            NLSTK_LOG_INFO("[IpShare][IPoSL][Server] configuration accepted; callback sent");
+        } else {
+            NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] configuration accepted but callback unavailable");
         }
     }
     if (result == 0 && opcode == IPOSL_OPCODE_ENABLE) {
         const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
         if (callbacks != NULL && callbacks->onConfigured != NULL) {
             callbacks->onConfigured(g_expectedPeer, true, IPOSL_SUCCESS);
+            NLSTK_LOG_INFO("[IpShare][IPoSL][Server] enable accepted; callback sent");
+        } else {
+            NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] enable accepted but callback unavailable");
         }
     }
 }
@@ -141,49 +188,66 @@ static void OnCallMethod(int32_t appId, uint16_t requestId, NLSTK_SsapServerCall
 int32_t IposlServerInitialize(void)
 {
     if (g_serverAppId != SSAP_APP_INVALID_ID) {
+        NLSTK_LOG_INFO("[IpShare][IPoSL][Server] initialize skipped appId=%d", g_serverAppId);
         return IPOSL_SUCCESS;
     }
     NLSTK_SsapAppServerCb_S callbacks = {0};
     callbacks.onCallMethod = OnCallMethod;
-    if (NLSTK_SsapServerRegApp(&callbacks, &g_serverAppId) != NLSTK_ERRCODE_SUCCESS ||
-        g_serverAppId == SSAP_APP_INVALID_ID) {
+    NLSTK_Errcode_E registerRet = NLSTK_SsapServerRegApp(&callbacks, &g_serverAppId);
+    if (registerRet != NLSTK_ERRCODE_SUCCESS || g_serverAppId == SSAP_APP_INVALID_ID) {
         g_serverAppId = SSAP_APP_INVALID_ID;
+        NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] register failed ret=%d", registerRet);
         return IPOSL_ERR_SSAP;
     }
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Server] registered appId=%d", g_serverAppId);
     if (AddIdentifierService() != IPOSL_SUCCESS || AddConfigService() != IPOSL_SUCCESS) {
+        NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] initialize failed while adding services appId=%d", g_serverAppId);
         IposlServerDeinit();
         return IPOSL_ERR_SSAP;
     }
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Server] initialize completed appId=%d", g_serverAppId);
     return IPOSL_SUCCESS;
 }
 
 int32_t IposlServerStart(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType)
 {
     if (peer == NULL || g_serverAppId == SSAP_APP_INVALID_ID || g_serverActive) {
+        NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] start rejected peerNull=%d appId=%d active=%d", peer == NULL,
+            g_serverAppId, g_serverActive);
         return IPOSL_ERR_INVALID_STATE;
     }
     (void)memcpy(g_expectedPeer, peer, sizeof(g_expectedPeer));
     g_expectedAddressType = addressType;
     g_configured = false;
     g_serverActive = true;
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Server] start completed appId=%d addressType=%u", g_serverAppId, addressType);
     return IPOSL_SUCCESS;
 }
 
 void IposlServerStop(void)
 {
+    bool wasActive = g_serverActive;
     (void)memset(g_expectedPeer, 0, sizeof(g_expectedPeer));
     (void)memset(g_configuredLayer2, 0, sizeof(g_configuredLayer2));
     g_expectedAddressType = 0;
     g_configured = false;
     g_serverActive = false;
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Server] stop completed wasActive=%d", wasActive);
 }
 
 void IposlServerDeinit(void)
 {
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Server] deinit started appId=%d", g_serverAppId);
     IposlServerStop();
     if (g_serverAppId != SSAP_APP_INVALID_ID) {
-        (void)NLSTK_SsapServerClearServices(g_serverAppId);
+        NLSTK_Errcode_E clearRet = NLSTK_SsapServerClearServices(g_serverAppId);
+        if (clearRet != NLSTK_ERRCODE_SUCCESS) {
+            NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] clear services failed appId=%d ret=%d", g_serverAppId,
+                clearRet);
+        }
         NLSTK_SsapServerDeregisterApplication(g_serverAppId);
+        NLSTK_LOG_INFO("[IpShare][IPoSL][Server] deregistered appId=%d", g_serverAppId);
     }
     g_serverAppId = SSAP_APP_INVALID_ID;
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Server] deinit completed");
 }
