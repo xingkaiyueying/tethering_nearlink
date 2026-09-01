@@ -20,6 +20,22 @@
 
 namespace OHOS {
 namespace Nearlink {
+enum NearlinkIpShareInterfaceCode {
+    NL_IPSHARE_IS_PEER_SUPPORTED = 0,
+    NL_IPSHARE_START_GATEWAY,
+    NL_IPSHARE_START_TERMINAL,
+    NL_IPSHARE_STOP,
+    NL_IPSHARE_GET_STATUS,
+    NL_IPSHARE_REGISTER_OBSERVER,
+    NL_IPSHARE_UNREGISTER_OBSERVER,
+    NL_IPSHARE_BUTT,
+};
+
+enum NearlinkIpShareObserverInterfaceCode {
+    NL_IPSHARE_OBSERVER_STATUS_CHANGED = 0,
+    NL_IPSHARE_OBSERVER_BUTT,
+};
+
 enum NearlinkSleCentralManagerCallbackInterfaceCode {
     NL_SLE_CENTRAL_MANAGER_CALLBACK = 0,
     NL_SLE_CENTRAL_MANAGER_BLE_BATCH_CALLBACK,

@@ -117,6 +117,7 @@ config("nearlink_stack_public_config") {
     "$NEARLINK_ROOT/services/stack/src/cp/bal/profile/hid/include",
     "$NEARLINK_ROOT/services/stack/src/cp/bal/profile/hid/include/inner",
     "$NEARLINK_ROOT/services/stack/src/cp/bal/profile/hid/src",
+    "$NEARLINK_ROOT/services/stack/src/cp/bal/iposl/interface",
     "$NEARLINK_ROOT/services/stack/src/cp/bsl/sle/cm/common/include",
     "$NEARLINK_ROOT/services/stack/src/cp/bsl/sle/cm/dyntrans/include",
     "$NEARLINK_ROOT/services/stack/src/cp/bsl/sle/cm/icb/include",
@@ -173,6 +174,10 @@ config("nearlink_stack_public_config") {
 }
 
 nearlink_stack_sources = [
+    "src/cp/bal/iposl/src/iposl_client.c",
+    "src/cp/bal/iposl/src/iposl_codec.c",
+    "src/cp/bal/iposl/src/iposl_profile.c",
+    "src/cp/bal/iposl/src/iposl_server.c",
     "src/cp/bal/audioctl/actm/src/actm.c",
     "src/cp/bal/audioctl/actm/src/actm_api.c",
     "src/cp/bal/audioctl/actm/src/actm_callback.c",

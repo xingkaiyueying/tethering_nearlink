@@ -75,6 +75,7 @@ const char* const GET_NEARLINK_LOCAL_MAC = "ohos.permission.GET_NEARLINK_LOCAL_M
 const char* const GET_NEARLINK_PEER_MAC = "ohos.permission.GET_NEARLINK_PEER_MAC";
 const char* const ACCESS_NEARLINK = "ohos.permission.ACCESS_NEARLINK";
 const char* const MANAGE_NEARLINK = "ohos.permission.MANAGE_NEARLINK";
+const char* const CONNECTIVITY_INTERNAL = "ohos.permission.CONNECTIVITY_INTERNAL";
 
 class NearLinkPermissionManager {
 public:

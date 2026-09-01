@@ -175,6 +175,11 @@ void DoInAntennaThread(const ThreadUtilFunc &func, uint64_t delayTime)
     PostTaskToThread(THREAD_ID_ANTENNA, func, delayTime);
 }
 
+void DoInIpShareThread(const ThreadUtilFunc &func, uint64_t delayTime)
+{
+    PostTaskToThread(THREAD_ID_IPSHARE, func, delayTime);
+}
+
 // Only for test.
 void ThreadUtil::ClearThreadStateMap()
 {
@@ -220,6 +225,7 @@ static std::string GetThreadName(int threadId)
         { THREAD_ID_FIND_SERVER,        "sle_find_server" },
         { THREAD_ID_FIND_PDR,           "sle_find_pdr" },
         { THREAD_ID_ANTENNA,            "sle_antenna" },
+        { THREAD_ID_IPSHARE,            "sle_ipshare" },
     };
 
     auto it = threadNameMap.find(threadId);

@@ -1,0 +1,20 @@
+# Copyright (C) 2026 Huawei Device Co., Ltd.
+# Licensed under the Apache License, Version 2.0 (the "License");
+
+import("//build/ohos.gni")
+import("../../nearlink_config.gni")
+
+ohos_executable("sleip_nearlink_stage1") {
+  sources = [ "sleip_nearlink_stage1.c" ]
+  include_dirs = [
+    "$NEARLINK_ROOT/services/stack/src/cp/bal/iposl/interface",
+    "$NEARLINK_ROOT/interfaces/inner_api/include",
+  ]
+  deps = [
+    "$NEARLINK_ROOT/frameworks/native:nearlink_framework",
+    "$NEARLINK_ROOT/services/stack:nearlink_stack",
+  ]
+  subsystem_name = "communication"
+  part_name = "nearlink_service"
+  install_enable = true
+}

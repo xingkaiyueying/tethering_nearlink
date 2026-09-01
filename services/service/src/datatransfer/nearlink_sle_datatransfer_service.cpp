@@ -14,6 +14,7 @@
  */
 
 #include "nearlink_sle_datatransfer_service.h"
+#include "nearlink_ipshare_channel.h"
 #include "SleInterfaceAdapterSub.h"
 #include "SleInterfaceManager.h"
 #include "SleControllerService.h"
@@ -1215,6 +1216,9 @@ void SleDataTransferService::SendDataStateCallback(const SLE_Addr_S *devAddr, ui
 
 bool SleDataTransferService::CheckChannelParamCallback(uint16_t srcPort)
 {
+    if (NearlinkIpShareChannel::IsAcceptingPort(srcPort)) {
+        return true;
+    }
     return SleDataTransferService::GetInstance().IsValidSrcPort(srcPort);
 }
 
@@ -1231,6 +1235,9 @@ void SleDataTransferService::ChannelStatusCallback(const QOSM_TransChannelRspPar
 {
     HILOGD("dt channel cb");
     NL_CHECK_RETURN(respParams, "stack dt channel cb null");
+    if (NearlinkIpShareChannel::HandleChannelStatus(respParams)) {
+        return;
+    }
     RawAddress rawAddress(RawAddress::ConvertToString(respParams->addr.addr));
     QOSM_TransChannelStatus_E state = respParams->status;
     AppConnectParamMapping temp;

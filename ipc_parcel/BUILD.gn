@@ -75,6 +75,7 @@ ohos_shared_library("nearlink_ipc_parcel") {
         "parcel/nearlink_cloud_pair_device.cpp",
         "parcel/nearlink_device_model_parcel.cpp",
         "parcel/nearlink_hadm_client_sounding_result.cpp",
+        "parcel/nearlink_ipshare_status.cpp",
         "parcel/nearlink_raw_address.cpp",
         "parcel/nearlink_sle_advertiser_data.cpp",
         "parcel/nearlink_sle_advertiser_settings.cpp",

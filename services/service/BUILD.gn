@@ -91,6 +91,7 @@ config("nearlink_service_config") {
     "src/audio",
     "src/ServiceManagerPluginLoader",
     "src/controller",
+    "src/ipshare",
   ]
 }
 
@@ -195,6 +196,12 @@ ServiceDatatransferSrc = [
   "src/datatransfer/nearlink_sle_datatransfer_service.cpp",
 ]
 
+ServiceIpShareSrc = [
+  "src/ipshare/nearlink_ipshare_channel.cpp",
+  "src/ipshare/nearlink_ipshare_service.cpp",
+  "src/ipshare/nearlink_ipshare_tun.cpp",
+]
+
 ServicePortSrc = [
   "src/port/PortService.cpp",
   "src/port/PortClientStackAdapter.cpp",
@@ -248,6 +255,7 @@ nearlink_service_sources += ServiceLisSrc
 nearlink_service_sources += ServiceIcceSrc
 nearlink_service_sources += ServiceDatashareSrc
 nearlink_service_sources += ServiceDatatransferSrc
+nearlink_service_sources += ServiceIpShareSrc
 nearlink_service_sources += ServicePortSrc
 nearlink_service_sources += ServiceDialogSrc
 nearlink_service_sources += ServiceCdsmSrc

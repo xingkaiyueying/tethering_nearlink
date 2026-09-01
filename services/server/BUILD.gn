@@ -16,6 +16,7 @@ import("../../nearlink_config.gni")
 
 nearlink_server_sources = [
     "src/nearlink_host_server.cpp",
+    "src/nearlink_ipshare_server.cpp",
     "src/nearlink_hid_host_server.cpp",
     "src/nearlink_sle_advertiser_server.cpp",
     "src/nearlink_sle_datatransfer_server.cpp",
@@ -101,6 +102,7 @@ ohos_shared_library("nearlink_server") {
     "$NEARLINK_ROOT/services/common/include",
     "$NEARLINK_ROOT/services/service/src/adapter",
     "$NEARLINK_ROOT/services/service/src/common",
+    "$NEARLINK_ROOT/services/service/src/ipshare",
     "$NEARLINK_ROOT/services/service/src/scan",
     "$NEARLINK_ROOT/interfaces/inner_api/include"
   ]
@@ -165,6 +167,7 @@ config("nearlink_server_test_public_config") {
     "$NEARLINK_ROOT/services/common/include",
     "$NEARLINK_ROOT/services/service/src/adapter",
     "$NEARLINK_ROOT/services/service/src/common",
+    "$NEARLINK_ROOT/services/service/src/ipshare",
     "$NEARLINK_ROOT/services/service/src/scan",
     "$NEARLINK_ROOT/interfaces/inner_api/include"
   ]
