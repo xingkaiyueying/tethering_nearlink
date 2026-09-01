@@ -15,7 +15,8 @@ namespace OHOS::Nearlink {
 
 NearlinkIpShareStub::NearlinkIpShareStub()
 {
-    auto permission = CHECK_PERM(true, MULTI_PERM(ACCESS_NEARLINK, CONNECTIVITY_INTERNAL));
+    // Private IPShare interfaces are unauthenticated for the two-device Demo probe.
+    auto permission = CHECK_PERM(false, {});
     memberFuncMap_ = {
         {NL_IPSHARE_IS_PEER_SUPPORTED, {IsPeerSupportedInner, permission}},
         {NL_IPSHARE_START_GATEWAY, {StartGatewayInner, permission}},
