@@ -64,9 +64,13 @@ static void FillProperty(NLSTK_SsapServicePropertyParam_S *property, const uint8
 
 static int32_t AddIdentifierService(void)
 {
+    /* The SSAP allocator requires a non-null property array even when the service has no properties. */
+    NLSTK_SsapServicePropertyParam_S emptyProperties = {0};
     NLSTK_ServiceParam_S service = {0};
     SetUuid(&service.serviceStatement.uuid, g_identifierUuid);
     service.serviceStatement.serviceType = ITEM_TYPE_VENDOR_PRIMARY_SERVICE;
+    service.property = &emptyProperties;
+    service.servicePropertyNum = 0;
     NLSTK_Errcode_E ret = NLSTK_SsapServerAddService(g_serverAppId, &service);
     if (ret != NLSTK_ERRCODE_SUCCESS) {
         NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] identifier service add failed appId=%d ret=%d", g_serverAppId, ret);
