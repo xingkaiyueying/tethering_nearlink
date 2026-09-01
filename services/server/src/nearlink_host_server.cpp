@@ -688,7 +688,7 @@ bool NearlinkHostServer::impl::createServers()
     sptr<NearlinkIpShareServer> ipShareServer = new (std::nothrow) NearlinkIpShareServer();
     NL_CHECK_RETURN_RET(ipShareServer, false, "ipShareServer is nullptr");
     sleServers_[PROFILE_IPSHARE_SERVER] = ipShareServer->AsObject();
-    HILOGI("[IpShare][Host] IP share IPC server registered profile=%{public}d", PROFILE_IPSHARE_SERVER);
+    HILOGI("[IpShare][Host] IP share IPC server registered profile=%{public}s", PROFILE_IPSHARE_SERVER.c_str());
 
     if (!createPluginServer()) {
         return false;
