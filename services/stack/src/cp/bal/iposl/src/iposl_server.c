@@ -54,7 +54,7 @@ static bool IsExpectedPeer(const SLE_Addr_S *addr)
 static void FillProperty(NLSTK_SsapServicePropertyParam_S *property, const uint8_t uuid[16],
     const uint8_t *value, uint16_t valueLen, uint32_t operation)
 {
-    property->type = ITEM_TYPE_VENDOR_PROPERTY;
+    property->type = ITEM_TYPE_STD_PROPERTY;
     SetUuid(&property->uuid, uuid);
     property->permission.permissionValue = SSAP_PERMISSION_AUTHENTICATION_NEED | SSAP_PERMISSION_ENCRYPTION_NEED;
     property->operation.operationValue = operation;
@@ -68,7 +68,7 @@ static int32_t AddIdentifierService(void)
     NLSTK_SsapServicePropertyParam_S emptyProperties = {0};
     NLSTK_ServiceParam_S service = {0};
     SetUuid(&service.serviceStatement.uuid, g_identifierUuid);
-    service.serviceStatement.serviceType = ITEM_TYPE_VENDOR_PRIMARY_SERVICE;
+    service.serviceStatement.serviceType = ITEM_TYPE_STD_PRIMARY_SERVICE;
     service.property = &emptyProperties;
     service.servicePropertyNum = 0;
     NLSTK_Errcode_E ret = NLSTK_SsapServerAddService(g_serverAppId, &service);
@@ -93,13 +93,13 @@ static int32_t AddConfigService(void)
         IPOSL_GATEWAY_CAPABILITY_LEN, SSAP_OPERATE_INDICATION_READ | SSAP_OPERATE_INDICATION_NOTIFY);
 
     NLSTK_SsapServiceMethodParam_S method = {0};
-    method.type = ITEM_TYPE_VENDOR_METHOD;
+    method.type = ITEM_TYPE_STD_METHOD;
     SetUuid(&method.uuid, g_methodUuid);
     method.permission.permissionValue = SSAP_PERMISSION_AUTHENTICATION_NEED | SSAP_PERMISSION_ENCRYPTION_NEED;
 
     NLSTK_ServiceParam_S service = {0};
     SetUuid(&service.serviceStatement.uuid, g_configUuid);
-    service.serviceStatement.serviceType = ITEM_TYPE_VENDOR_PRIMARY_SERVICE;
+    service.serviceStatement.serviceType = ITEM_TYPE_STD_PRIMARY_SERVICE;
     service.servicePropertyNum = 4;
     service.property = properties;
     service.serviceMethodNum = 1;
