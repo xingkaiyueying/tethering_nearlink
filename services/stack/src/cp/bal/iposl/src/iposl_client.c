@@ -200,8 +200,9 @@ static void OnConnectionStateChanged(int32_t appId, uint8_t state, NLSTK_Errcode
     if (state == SSAP_CONNECT_STATE_CONNECTED && ret == NLSTK_ERRCODE_SUCCESS) {
         NLSTK_SsapUuid_S uuid = {0};
         SetUuid(&uuid, g_terminal ? g_configUuid : g_identifierUuid);
+        /* The stack derives standard/vendor UUID encoding from uuid; this argument is a find-structure type. */
         NLSTK_Errcode_E discoverRet = NLSTK_SsapClientDiscoverServicesByUuid(appId, &uuid, SSAP_START_HANDLE,
-            SSAP_END_HANDLE, ITEM_TYPE_VENDOR_PRIMARY_SERVICE);
+            SSAP_END_HANDLE, FIND_STRUCTURE_TYPE_PRIMARY_SERVICE);
         if (discoverRet != NLSTK_ERRCODE_SUCCESS) {
             NLSTK_LOG_ERROR("[IpShare][IPoSL][Client] service discovery request failed appId=%d ret=%d", appId,
                 discoverRet);
