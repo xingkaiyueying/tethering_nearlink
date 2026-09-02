@@ -261,7 +261,7 @@ bool SleRemoteDeviceManager::SetAcbState(const std::string &address, int connect
         value->SetAcbConnectState(connectState);
     });
     HILOGI("[IpShare][PeerState] ACB state stored addr=%{public}s state=%{public}d found=%{public}d",
-        GetEncryptAddr(address).c_str(), connectState, static_cast<int>(ret));
+        address.c_str(), connectState, static_cast<int>(ret));
     return ret;
 }
 
@@ -407,7 +407,7 @@ bool SleRemoteDeviceManager::SetPairStatus(const RawAddress &device, int pairSta
         value->SetPairedStatus(pairStatus);
     });
     HILOGI("[IpShare][PeerState] pair state stored addr=%{public}s state=%{public}d found=%{public}d",
-        GetEncryptAddr(device.GetAddress()).c_str(), pairStatus, static_cast<int>(ret));
+        device.GetAddress().c_str(), pairStatus, static_cast<int>(ret));
     return ret;
 }
 
@@ -723,7 +723,7 @@ bool SleRemoteDeviceManager::SetConnectionInfo(const RawAddress &device, uint16_
             value->SetAcbConnectState(static_cast<int>(SleConnState::SLE_CONNECTION_STATE_CONNECTED));
     });
     HILOGI("[IpShare][PeerState] connection stored addr=%{public}s state=%{public}d lcid=%{public}u "
-        "role=%{public}u addrType=%{public}u found=%{public}d", GetEncryptAddr(device.GetAddress()).c_str(),
+        "role=%{public}u addrType=%{public}u found=%{public}d", device.GetAddress().c_str(),
         static_cast<int>(SleConnState::SLE_CONNECTION_STATE_CONNECTED), static_cast<unsigned int>(lcid),
         static_cast<unsigned int>(role), static_cast<unsigned int>(addrType), static_cast<int>(ret));
     return ret;
