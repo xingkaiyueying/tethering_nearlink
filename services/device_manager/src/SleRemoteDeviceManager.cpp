@@ -256,10 +256,13 @@ int SleRemoteDeviceManager::GetAcbState(const std::string &address)
 
 bool SleRemoteDeviceManager::SetAcbState(const std::string &address, int connectState)
 {
-    return peerConnDeviceSafeList_.GetValueAndOpt(address, [connectState](
+    bool ret = peerConnDeviceSafeList_.GetValueAndOpt(address, [connectState](
         std::string key, std::shared_ptr<SlePeripheralDevice> value) {
         value->SetAcbConnectState(connectState);
     });
+    HILOGI("[IpShare][PeerState] ACB state stored addr=%{public}s state=%{public}d found=%{public}d",
+        GetEncryptAddr(address).c_str(), connectState, static_cast<int>(ret));
+    return ret;
 }
 
 bool SleRemoteDeviceManager::SetAcbDisConnReason(const std::string &address, int reason)
@@ -399,10 +402,13 @@ int SleRemoteDeviceManager::GetPairState(const RawAddress &device)
 
 bool SleRemoteDeviceManager::SetPairStatus(const RawAddress &device, int pairStatus)
 {
-    return peerConnDeviceSafeList_.GetValueAndOpt(device.GetAddress(), [pairStatus](
+    bool ret = peerConnDeviceSafeList_.GetValueAndOpt(device.GetAddress(), [pairStatus](
         std::string key, std::shared_ptr<SlePeripheralDevice> value) {
         value->SetPairedStatus(pairStatus);
     });
+    HILOGI("[IpShare][PeerState] pair state stored addr=%{public}s state=%{public}d found=%{public}d",
+        GetEncryptAddr(device.GetAddress()).c_str(), pairStatus, static_cast<int>(ret));
+    return ret;
 }
 
 bool SleRemoteDeviceManager::SetPrePairStatus(const RawAddress &device, int pairStatus)
@@ -709,13 +715,18 @@ int SleRemoteDeviceManager::GetEncryptedDevicesCount(const std::vector<RawAddres
 
 bool SleRemoteDeviceManager::SetConnectionInfo(const RawAddress &device, uint16_t lcid, uint8_t role, uint8_t addrType)
 {
-    return peerConnDeviceSafeList_.GetValueAndOpt(device.GetAddress(),
+    bool ret = peerConnDeviceSafeList_.GetValueAndOpt(device.GetAddress(),
         [lcid, role, addrType](std::string key, std::shared_ptr<SlePeripheralDevice> value) {
             value->SetLcid(lcid);
             value->SetRoles(role);
             value->SetAddressType(addrType);
             value->SetAcbConnectState(static_cast<int>(SleConnState::SLE_CONNECTION_STATE_CONNECTED));
     });
+    HILOGI("[IpShare][PeerState] connection stored addr=%{public}s state=%{public}d lcid=%{public}u "
+        "role=%{public}u addrType=%{public}u found=%{public}d", GetEncryptAddr(device.GetAddress()).c_str(),
+        static_cast<int>(SleConnState::SLE_CONNECTION_STATE_CONNECTED), static_cast<unsigned int>(lcid),
+        static_cast<unsigned int>(role), static_cast<unsigned int>(addrType), static_cast<int>(ret));
+    return ret;
 }
 
 void SleRemoteDeviceManager::SaveCdsmInfo(const RawAddress &reportAddr, bool isPrivate,
