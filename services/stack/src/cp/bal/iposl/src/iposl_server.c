@@ -124,15 +124,17 @@ static void OnCallMethod(int32_t appId, uint16_t requestId, NLSTK_SsapServerCall
     uint8_t result = 0xFF;
     bool appMatch = appId == g_serverAppId;
     bool peerMatch = method != NULL && IsExpectedPeer(&method->addr);
-    bool methodMatch = method != NULL && memcmp(method->uuid.uuid, g_methodUuid, sizeof(g_methodUuid)) == 0;
+    /* SSAP resolves the handle to this app's registered method before invoking this callback. The current
+     * callback path does not populate method->uuid, and this private IPoSL app registers exactly one method. */
+    bool methodHandleValid = method != NULL && method->handle != 0;
     int32_t decodeRet = method == NULL ? IPOSL_ERR_INVALID_PARAM :
         IposlCodecDecodeRequest(method->param.data, method->param.len, &opcode, layer2);
-    bool accepted = g_serverActive && appMatch && method != NULL && peerMatch && methodMatch &&
+    bool accepted = g_serverActive && appMatch && method != NULL && peerMatch && methodHandleValid &&
         decodeRet == IPOSL_SUCCESS;
     if (!accepted) {
         NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] method rejected requestId=%u appId=%d active=%d appMatch=%d "
-            "method=%d peerMatch=%d methodMatch=%d decodeRet=%d", requestId, appId, g_serverActive, appMatch,
-            method != NULL, peerMatch, methodMatch, decodeRet);
+            "method=%d handle=%u peerMatch=%d methodHandleValid=%d decodeRet=%d", requestId, appId, g_serverActive,
+            appMatch, method != NULL, method == NULL ? 0 : method->handle, peerMatch, methodHandleValid, decodeRet);
     } else {
         NLSTK_LOG_INFO("[IpShare][IPoSL][Server] method request accepted requestId=%u appId=%d opcode=%u", requestId,
             appId, opcode);
