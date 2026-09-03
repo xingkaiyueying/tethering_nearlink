@@ -68,8 +68,8 @@ static void Finish(bool keepClient)
     if (disconnectRet != NLSTK_ERRCODE_SUCCESS) {
         NLSTK_LOG_ERROR("[IpShare][IPoSL][Client] disconnect failed appId=%d ret=%d", appId, disconnectRet);
     }
-    NLSTK_SsapClientDeregApp(appId);
-    NLSTK_LOG_INFO("[IpShare][IPoSL][Client] client deregistered appId=%d", appId);
+    NLSTK_SsapClientDeregAppAsync(appId);
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Client] client deregister requested appId=%d", appId);
     g_clientAppId = SSAP_APP_INVALID_ID;
     g_finishing = false;
 }
@@ -81,8 +81,8 @@ static void FinishDisconnected(void)
     }
     g_finishing = true;
     int32_t appId = g_clientAppId;
-    NLSTK_SsapClientDeregApp(appId);
-    NLSTK_LOG_INFO("[IpShare][IPoSL][Client] disconnected client deregistered appId=%d", appId);
+    NLSTK_SsapClientDeregAppAsync(appId);
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Client] disconnected client deregister requested appId=%d", appId);
     g_clientAppId = SSAP_APP_INVALID_ID;
     g_finishing = false;
 }
@@ -140,16 +140,25 @@ static void OnCallMethod(int32_t appId, NLSTK_SsapClientCallMethodResult_S *resp
     NotifyConfigured(true, IPOSL_SUCCESS);
 }
 
-static void OnFindServiceByUuid(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_Errcode_E ret)
+static void OnGetServices(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_SsapServ_S *services,
+    uint16_t serviceNum, NLSTK_SsapClientFreeFunc freeFunc)
 {
-    NLSTK_SsapServ_S *services = NULL;
-    uint16_t serviceNum = 0;
-    NLSTK_SsapClientFreeFunc freeFunc = NULL;
-    if (appId != g_clientAppId || uuid == NULL || ret != NLSTK_ERRCODE_SUCCESS ||
-        NLSTK_SsapClientGetServicesByUuid(appId, uuid, &services, &serviceNum, &freeFunc) != NLSTK_ERRCODE_SUCCESS ||
-        services == NULL || serviceNum == 0) {
-        NLSTK_LOG_ERROR("[IpShare][IPoSL][Client] service discovery failed appId=%d expectedAppId=%d terminal=%d "
-            "ret=%d", appId, g_clientAppId, g_terminal, ret);
+    const uint8_t *expectedUuid = g_terminal ? g_configUuid : g_identifierUuid;
+    if (appId != g_clientAppId) {
+        NLSTK_LOG_WARN("[IpShare][IPoSL][Client] get services callback ignored appId=%d expectedAppId=%d", appId,
+            g_clientAppId);
+        if (freeFunc != NULL && services != NULL) {
+            freeFunc(services, serviceNum);
+        }
+        return;
+    }
+    if (uuid == NULL || memcmp(uuid->uuid, expectedUuid, sizeof(uuid->uuid)) != 0 || services == NULL ||
+        serviceNum == 0) {
+        NLSTK_LOG_ERROR("[IpShare][IPoSL][Client] get services failed appId=%d terminal=%d uuid=%d services=%d "
+            "serviceNum=%u", appId, g_terminal, uuid != NULL, services != NULL, serviceNum);
+        if (freeFunc != NULL && services != NULL) {
+            freeFunc(services, serviceNum);
+        }
         if (g_terminal) {
             NotifyConfigured(false, IPOSL_ERR_NOT_SUPPORTED);
         } else {
@@ -159,7 +168,7 @@ static void OnFindServiceByUuid(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_Err
         return;
     }
     if (!g_terminal) {
-        if (freeFunc != NULL) {
+        if (freeFunc != NULL && services != NULL) {
             freeFunc(services, serviceNum);
         }
         NotifySupported(true, IPOSL_SUCCESS);
@@ -176,7 +185,7 @@ static void OnFindServiceByUuid(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_Err
             }
         }
     }
-    if (freeFunc != NULL) {
+    if (freeFunc != NULL && services != NULL) {
         freeFunc(services, serviceNum);
     }
     if (g_methodHandle == 0 || SendRequest(IPOSL_OPCODE_CONFIGURE) != IPOSL_SUCCESS) {
@@ -186,6 +195,35 @@ static void OnFindServiceByUuid(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_Err
     } else {
         NLSTK_LOG_INFO("[IpShare][IPoSL][Client] terminal configuration method discovered handle=%u", g_methodHandle);
     }
+}
+
+static void OnFindServiceByUuid(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_Errcode_E ret)
+{
+    if (appId != g_clientAppId || uuid == NULL || ret != NLSTK_ERRCODE_SUCCESS) {
+        NLSTK_LOG_ERROR("[IpShare][IPoSL][Client] service discovery failed appId=%d expectedAppId=%d terminal=%d "
+            "ret=%d", appId, g_clientAppId, g_terminal, ret);
+        if (g_terminal) {
+            NotifyConfigured(false, IPOSL_ERR_NOT_SUPPORTED);
+        } else {
+            NotifySupported(false, IPOSL_SUCCESS);
+        }
+        Finish(false);
+        return;
+    }
+    NLSTK_Errcode_E getRet = NLSTK_SsapClientGetServicesByUuidAsyn(appId, uuid);
+    if (getRet != NLSTK_ERRCODE_SUCCESS) {
+        NLSTK_LOG_ERROR("[IpShare][IPoSL][Client] async get services request failed appId=%d terminal=%d ret=%d",
+            appId, g_terminal, getRet);
+        if (g_terminal) {
+            NotifyConfigured(false, IPOSL_ERR_SSAP);
+        } else {
+            NotifySupported(false, IPOSL_ERR_SSAP);
+        }
+        Finish(false);
+        return;
+    }
+    NLSTK_LOG_INFO("[IpShare][IPoSL][Client] async get services request submitted appId=%d terminal=%d", appId,
+        g_terminal);
 }
 
 static void OnConnectionStateChanged(int32_t appId, uint8_t state, NLSTK_Errcode_E ret, int32_t reason)
@@ -241,6 +279,7 @@ int32_t IposlClientStart(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addres
     NLSTK_SsapAppClientCb_S callbacks = {0};
     callbacks.onConnectionStateChanged = OnConnectionStateChanged;
     callbacks.onFindServiceByUuid = OnFindServiceByUuid;
+    callbacks.onGetServices = OnGetServices;
     callbacks.onCallMethod = OnCallMethod;
     NLSTK_Errcode_E registerRet = NLSTK_SsapClientRegApp(&g_clientAppId, &callbacks, &addr);
     if (registerRet != NLSTK_ERRCODE_SUCCESS || g_clientAppId == SSAP_APP_INVALID_ID) {
