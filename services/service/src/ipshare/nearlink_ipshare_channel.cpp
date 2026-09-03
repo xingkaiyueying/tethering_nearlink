@@ -19,6 +19,15 @@ constexpr uint8_t IPV4_MIN_IHL = 5;
 constexpr uint8_t IPV4_PROTOCOL_UDP = 17;
 constexpr uint16_t DHCP_SERVER_PORT = 67;
 constexpr uint16_t DHCP_CLIENT_PORT = 68;
+constexpr uint16_t UDP_HEADER_LENGTH = 8;
+constexpr uint16_t DHCP_OPTIONS_OFFSET = 240;
+constexpr uint16_t DHCP_MAGIC_COOKIE_OFFSET = 236;
+constexpr uint8_t DHCP_BOOT_REPLY = 2;
+constexpr uint8_t DHCP_OPTION_PAD = 0;
+constexpr uint8_t DHCP_OPTION_MESSAGE_TYPE = 53;
+constexpr uint8_t DHCP_OPTION_END = 255;
+constexpr uint8_t DHCP_MESSAGE_ACK = 5;
+constexpr uint8_t DHCP_MAGIC_COOKIE[] = {99, 130, 83, 99};
 }
 
 NearlinkIpShareChannel &NearlinkIpShareChannel::GetInstance()
@@ -262,10 +271,13 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
             dataLen, bound);
         return -1;
     }
+    bool dhcpAck = !bound && IsDhcpAck(data, static_cast<uint16_t>(dataLen));
     int32_t ret = tun_.Write(data, static_cast<uint16_t>(dataLen));
     if (ret != 0) {
         HILOGE("[IpShare][Channel] inbound packet delivery to TUN failed ret=%{public}d length=%{public}u", ret,
             dataLen);
+    } else if (dhcpAck) {
+        SetDhcpBound(true);
     }
     return ret;
 }
@@ -290,6 +302,7 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
             length, bound);
         return -1;
     }
+    bool dhcpAck = !bound && IsDhcpAck(data, length);
     SDF_Buff_S *buffer = SDF_BuffNewWithReserve(length);
     if (buffer == nullptr) {
         HILOGE("[IpShare][Channel] outbound packet failed: buffer allocation length=%{public}u", length);
@@ -310,7 +323,59 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
             lcid, tcid, ret);
         return -1;
     }
+    if (dhcpAck) {
+        SetDhcpBound(true);
+    }
     return 0;
+}
+
+bool NearlinkIpShareChannel::IsDhcpAck(const uint8_t *data, uint16_t length)
+{
+    if (data == nullptr || length < 20 || (data[0] >> 4) != IPV4_VERSION) {
+        return false;
+    }
+    uint16_t headerLen = static_cast<uint16_t>((data[0] & 0x0F) * 4);
+    if (headerLen < IPV4_MIN_IHL * 4 || data[9] != IPV4_PROTOCOL_UDP ||
+        length < headerLen + UDP_HEADER_LENGTH + DHCP_OPTIONS_OFFSET) {
+        return false;
+    }
+    uint16_t sourcePort = static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen]) << 8) |
+        data[headerLen + 1]);
+    uint16_t destinationPort = static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen + 2]) << 8) |
+        data[headerLen + 3]);
+    if (sourcePort != DHCP_SERVER_PORT || destinationPort != DHCP_CLIENT_PORT) {
+        return false;
+    }
+    uint16_t udpLength = static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen + 4]) << 8) |
+        data[headerLen + 5]);
+    if (udpLength < UDP_HEADER_LENGTH + DHCP_OPTIONS_OFFSET || headerLen + udpLength > length) {
+        return false;
+    }
+    const uint8_t *dhcp = data + headerLen + UDP_HEADER_LENGTH;
+    uint16_t dhcpLength = static_cast<uint16_t>(udpLength - UDP_HEADER_LENGTH);
+    if (dhcp[0] != DHCP_BOOT_REPLY ||
+        memcmp(dhcp + DHCP_MAGIC_COOKIE_OFFSET, DHCP_MAGIC_COOKIE, sizeof(DHCP_MAGIC_COOKIE)) != 0) {
+        return false;
+    }
+    uint16_t offset = DHCP_OPTIONS_OFFSET;
+    while (offset < dhcpLength) {
+        uint8_t option = dhcp[offset++];
+        if (option == DHCP_OPTION_PAD) {
+            continue;
+        }
+        if (option == DHCP_OPTION_END || offset >= dhcpLength) {
+            return false;
+        }
+        uint8_t optionLength = dhcp[offset++];
+        if (optionLength > dhcpLength - offset) {
+            return false;
+        }
+        if (option == DHCP_OPTION_MESSAGE_TYPE) {
+            return optionLength == 1 && dhcp[offset] == DHCP_MESSAGE_ACK;
+        }
+        offset = static_cast<uint16_t>(offset + optionLength);
+    }
+    return false;
 }
 
 bool NearlinkIpShareChannel::ValidateIpv4(const uint8_t *data, uint16_t length, bool dhcpBound)
