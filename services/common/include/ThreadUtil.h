@@ -51,6 +51,7 @@ enum ThreadId {
     THREAD_ID_FIND_SERVER,
     THREAD_ID_FIND_PDR,
     THREAD_ID_ANTENNA,
+    THREAD_ID_IPSHARE,
     // please add before this.
     THREAD_ID_BUTT
 };
@@ -253,6 +254,11 @@ void DoInDeviceAdapterThread(const ThreadUtilFunc &func, uint64_t delayTime = 0)
  * @param delayTime Process the event after 'delayTime' milliseconds.
  */
 void DoInAntennaThread(const ThreadUtilFunc &func, uint64_t delayTime = 0);
+
+/**
+ * @brief Post a task to the private NearLink IP sharing worker.
+ */
+void DoInIpShareThread(const ThreadUtilFunc &func, uint64_t delayTime = 0);
 
 class ThreadUtil {
 public:

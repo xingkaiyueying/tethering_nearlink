@@ -21,6 +21,7 @@
 #include "nearlink_sle_central_manager_server.h"
 #include "nearlink_sle_advertiser_server.h"
 #include "nearlink_sle_controller_server.h"
+#include "nearlink_ipshare_server.h"
 #include "nearlink_sle_datatransfer_server.h"
 #include "nearlink_ssap_client_server.h"
 #include "nearlink_asc_server.h"
@@ -683,6 +684,11 @@ bool NearlinkHostServer::impl::createServers()
     sptr<NearlinkSleControllerServer> sleControllerServer = new (std::nothrow) NearlinkSleControllerServer();
     NL_CHECK_RETURN_RET(sleControllerServer, false, "sleControllerServer is nullptr");
     sleServers_[NEARLINK_SLE_CONTROLLER_SERVER] = sleControllerServer->AsObject();
+
+    sptr<NearlinkIpShareServer> ipShareServer = new (std::nothrow) NearlinkIpShareServer();
+    NL_CHECK_RETURN_RET(ipShareServer, false, "ipShareServer is nullptr");
+    sleServers_[PROFILE_IPSHARE_SERVER] = ipShareServer->AsObject();
+    HILOGI("[IpShare][Host] IP share IPC server registered profile=%{public}s", PROFILE_IPSHARE_SERVER.c_str());
 
     if (!createPluginServer()) {
         return false;

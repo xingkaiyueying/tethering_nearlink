@@ -58,6 +58,8 @@ ohos_source_set("nl_service_ipc") {
 
     sources = [
         "src/nearlink_host_observer_proxy.cpp",
+        "src/nearlink_ipshare_observer_proxy.cpp",
+        "src/nearlink_ipshare_stub.cpp",
         "src/nearlink_host_stub.cpp",
         "src/nearlink_hid_host_stub.cpp",
         "src/nearlink_sle_advertiser_callback_proxy.cpp",

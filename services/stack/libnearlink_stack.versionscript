@@ -78,7 +78,17 @@
       "*NLSTK_SsapServerUpdatePropertyValue*";
       "*NLSTK_SsapServerUpdateDescriptorValue*";
       "*NLSTK_SsapServerAuthorizeResult*";
+      "*NLSTK_SsapServerSendMethodCallRes*";
       "*NLSTK_SsapServerUpdateAndNotifyProperty*";
+
+      "*IposlProfile*";
+      "*IposlCodec*";
+      "*DTAP_DataSend*";
+      "*DTAP_RegisterProtoRecvCbk*";
+      "*DTAP_UnregisterProtoRecvCbk*";
+      "*SDF_BuffNewWithReserve*";
+      "*SDF_BuffAppend*";
+      "*SDF_BuffFree*";
 
       "*HadmRegCbk*";
       "*HadmStartSounding*";

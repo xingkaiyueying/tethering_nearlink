@@ -29,6 +29,7 @@
 #include "nearlink_dft_ue.h"
 #include "nearlink_dft_excep.h"
 #include "nearlink_system_config.h"
+#include "nearlink_ipshare_service.h"
 
 namespace OHOS {
 namespace Nearlink {
@@ -112,7 +113,15 @@ void ProfileServiceManager::Start() const
     LOG_INFO("start");
 
     if (SleServiceManager::GetInstance()->GetAdapter(SleTransport::ADAPTER_SLE)) {
+        int32_t ret = NearlinkIpShareService::GetInstance().Initialize();
+        if (ret != 0) {
+            HILOGE("[IpShare][Profile] initialize failed during service start ret=%{public}d", ret);
+        } else {
+            HILOGI("[IpShare][Profile] initialize completed during service start");
+        }
         CreateSleProfileServices();
+    } else {
+        HILOGE("[IpShare][Profile] initialize skipped: SLE adapter unavailable");
     }
 }
 
@@ -150,6 +159,9 @@ void ProfileServiceManager::Stop() const
 {
     LOG_INFO("start");
 
+    HILOGI("[IpShare][Profile] shutdown started");
+    NearlinkIpShareService::GetInstance().Shutdown();
+
     for (auto &sp : GET_SUPPORT_PROFILES()) {
         SleInterfaceProfile *profile = nullptr;
         if (pimpl->startedProfiles_.Find(SleTransport::ADAPTER_SLB, sp.mName, profile)) {
@@ -165,6 +177,7 @@ void ProfileServiceManager::Stop() const
 
     pimpl->startedProfiles_.Clear();
     pimpl->profilesState_.Clear();
+    HILOGI("[IpShare][Profile] shutdown completed");
 }
 
 SleInterfaceProfile *ProfileServiceManager::GetProfileService(const std::string &name) const
@@ -198,6 +211,15 @@ bool ProfileServiceManager::Enable(const SleTransport transport) const
 void ProfileServiceManager::OnAllEnabled(const SleTransport transport) const
 {
     LOG_INFO("%{public}d", transport);
+
+    if (transport == SleTransport::ADAPTER_SLE) {
+        int32_t ret = NearlinkIpShareService::GetInstance().Initialize();
+        if (ret != 0) {
+            HILOGE("[IpShare][Profile] reinitialize failed ret=%{public}d", ret);
+        } else {
+            HILOGI("[IpShare][Profile] reinitialize completed");
+        }
+    }
 
     if (pimpl->startedProfiles_.IsEmpty(transport) ||
         pimpl->profilesState_.GetProfiles(transport) == nullptr) {
@@ -349,6 +371,9 @@ void ProfileServiceManager::EnableCompleteNotify(const SleTransport transport) c
 bool ProfileServiceManager::Disable(const SleTransport transport) const
 {
     LOG_INFO("transport is %{public}d", transport);
+    if (transport == SleTransport::ADAPTER_SLE) {
+        NearlinkIpShareService::GetInstance().ResetForAdapterStop();
+    }
     auto adapter = SleServiceManager::GetInstance()->GetAdapter(SleTransport::ADAPTER_SLE);
     if (adapter != nullptr) {
         adapter->CancelAllConnection();

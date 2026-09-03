@@ -38,7 +38,8 @@ FwkSrc = [
     "nearlink_vcp_client.cpp",
     "nearlink_tws_client.cpp",
     "nearlink_cdsm_client.cpp",
-    "nearlink_sle_controller.cpp"
+    "nearlink_sle_controller.cpp",
+    "nearlink_ipshare_client.cpp",
 ]
 
 NL_IPCSRC_DIR = "../ipc/src"
@@ -69,6 +70,8 @@ FwkIpcSrc = [
     "$NL_IPCSRC_DIR/nearlink_cdsm_client_proxy.cpp",
     "$NL_IPCSRC_DIR/nearlink_device_rssi_observer_stub.cpp",
     "$NL_IPCSRC_DIR/nearlink_sle_controller_proxy.cpp",
+    "$NL_IPCSRC_DIR/nearlink_ipshare_observer_stub.cpp",
+    "$NL_IPCSRC_DIR/nearlink_ipshare_proxy.cpp",
 ]
 
 RangAlgSrc = [
@@ -80,6 +83,7 @@ config("nl_framework_public") {
       "include",
       "$NEARLINK_ROOT/interfaces/inner_api/include",
       "$NEARLINK_ROOT/interfaces/def",
+      "$NEARLINK_ROOT/ipc_parcel/parcel",
     ]
 }
 
