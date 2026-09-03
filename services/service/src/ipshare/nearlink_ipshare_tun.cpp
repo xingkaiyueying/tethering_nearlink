@@ -11,6 +11,7 @@
 #include <linux/if.h>
 #include <linux/if_tun.h>
 #include <poll.h>
+#include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -21,6 +22,35 @@ namespace {
 constexpr char IP_SHARE_TUN_DEVICE[] = "/dev/tun";
 constexpr char IP_SHARE_IFACE[] = "sleip0";
 constexpr size_t IP_SHARE_PACKET_MAX = 1500;
+
+int32_t SetInterfaceUp(const char *ifname)
+{
+    int socketFd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (socketFd < 0) {
+        HILOGE("[IpShare][Tun] control socket open failed errno=%{public}d", errno);
+        return -errno;
+    }
+    struct ifreq request = {};
+    (void)strncpy(request.ifr_name, ifname, IFNAMSIZ - 1);
+    if (ioctl(socketFd, SIOCGIFFLAGS, &request) < 0) {
+        int error = errno;
+        (void)close(socketFd);
+        HILOGE("[IpShare][Tun] get interface flags failed name=%{public}s errno=%{public}d", ifname, error);
+        return -error;
+    }
+    if ((request.ifr_flags & IFF_UP) == 0) {
+        request.ifr_flags |= IFF_UP;
+        if (ioctl(socketFd, SIOCSIFFLAGS, &request) < 0) {
+            int error = errno;
+            (void)close(socketFd);
+            HILOGE("[IpShare][Tun] set interface up failed name=%{public}s errno=%{public}d", ifname, error);
+            return -error;
+        }
+    }
+    (void)close(socketFd);
+    HILOGI("[IpShare][Tun] interface is up name=%{public}s", ifname);
+    return 0;
+}
 }
 
 NearlinkIpShareTun::~NearlinkIpShareTun()
@@ -52,6 +82,11 @@ int32_t NearlinkIpShareTun::Open(const PacketCallback &callback)
         (void)close(fd);
         HILOGE("[IpShare][Tun] TUNSETIFF failed errno=%{public}d", error);
         return -error;
+    }
+    int32_t upRet = SetInterfaceUp(request.ifr_name);
+    if (upRet != 0) {
+        (void)close(fd);
+        return upRet;
     }
     callback_ = callback;
     fd_ = fd;
