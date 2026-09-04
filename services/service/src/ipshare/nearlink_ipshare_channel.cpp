@@ -6,6 +6,7 @@
 #include "nearlink_ipshare_channel.h"
 
 #include <cstring>
+#include <string>
 
 #include "log.h"
 #include "iposl_profile.h"
@@ -18,6 +19,9 @@ constexpr uint8_t IPV4_VERSION = 4;
 constexpr uint8_t IPV4_MIN_IHL = 5;
 constexpr uint8_t IPV4_PROTOCOL_ICMP = 1;
 constexpr uint8_t IPV4_PROTOCOL_UDP = 17;
+constexpr uint8_t IPV6_VERSION = 6;
+constexpr uint8_t IPV6_PROTOCOL_ICMP = 58;
+constexpr uint16_t IPV6_HEADER_LENGTH = 40;
 constexpr uint16_t DHCP_SERVER_PORT = 67;
 constexpr uint16_t DHCP_CLIENT_PORT = 68;
 constexpr uint16_t UDP_HEADER_LENGTH = 8;
@@ -32,6 +36,9 @@ constexpr uint8_t DHCP_MAGIC_COOKIE[] = {99, 130, 83, 99};
 constexpr uint16_t TUN_PI_HEADER_LENGTH = 4;
 constexpr uint16_t ETHERNET_HEADER_LENGTH = 14;
 constexpr uint16_t ETHER_TYPE_IPV4 = 0x0800;
+constexpr uint16_t PACKET_HEX_BYTES_PER_LINE = 16;
+constexpr uint16_t PACKET_HEX_LOG_LIMIT = 256;
+constexpr char HEX_DIGITS[] = "0123456789abcdef";
 
 struct Ipv4PacketView {
     const uint8_t *data = nullptr;
@@ -83,6 +90,36 @@ bool ResolveIpv4Packet(const uint8_t *data, uint16_t length, Ipv4PacketView &vie
     return false;
 }
 
+void LogPacketHex(const char *direction, const uint8_t *data, uint16_t length)
+{
+    if (data == nullptr) {
+        return;
+    }
+    uint16_t dumpLength = length < PACKET_HEX_LOG_LIMIT ? length : PACKET_HEX_LOG_LIMIT;
+    for (uint16_t offset = 0; offset < dumpLength; offset += PACKET_HEX_BYTES_PER_LINE) {
+        uint16_t lineLength = static_cast<uint16_t>(dumpLength - offset);
+        if (lineLength > PACKET_HEX_BYTES_PER_LINE) {
+            lineLength = PACKET_HEX_BYTES_PER_LINE;
+        }
+        std::string hex;
+        hex.reserve(static_cast<size_t>(lineLength) * 3);
+        for (uint16_t index = 0; index < lineLength; ++index) {
+            uint8_t value = data[offset + index];
+            if (!hex.empty()) {
+                hex.push_back(':');
+            }
+            hex.push_back(HEX_DIGITS[value >> 4]);
+            hex.push_back(HEX_DIGITS[value & 0x0F]);
+        }
+        HILOGW("[DHCP][IpShare][PacketHex] %{public}s offset=%{public}u data=%{public}s", direction, offset,
+            hex.c_str());
+    }
+    if (dumpLength < length) {
+        HILOGW("[DHCP][IpShare][PacketHex] %{public}s truncated logged=%{public}u total=%{public}u", direction,
+            dumpLength, length);
+    }
+}
+
 void LogUnrecognizedPacket(const char *direction, const uint8_t *data, uint16_t length)
 {
     if (data == nullptr || length < 8) {
@@ -93,6 +130,17 @@ void LogUnrecognizedPacket(const char *direction, const uint8_t *data, uint16_t 
         "head=%{public}02x:%{public}02x:%{public}02x:%{public}02x:%{public}02x:%{public}02x:%{public}02x:"
         "%{public}02x", direction, length, data[0] >> 4, data[0], data[1], data[2], data[3], data[4], data[5],
         data[6], data[7]);
+    if ((data[0] >> 4) == IPV6_VERSION && length >= IPV6_HEADER_LENGTH) {
+        uint16_t payloadLength = ReadUint16(data + 4);
+        HILOGW("[DHCP][IpShare][IPv6] %{public}s payload=%{public}u nextHeader=%{public}u hopLimit=%{public}u",
+            direction, payloadLength, data[6], data[7]);
+        if (data[6] == IPV6_PROTOCOL_ICMP && length >= IPV6_HEADER_LENGTH + 8) {
+            const uint8_t *icmp = data + IPV6_HEADER_LENGTH;
+            HILOGW("[DHCP][IpShare][ICMPv6] %{public}s type=%{public}u code=%{public}u id=%{public}u "
+                "seq=%{public}u", direction, icmp[0], icmp[1], ReadUint16(icmp + 4), ReadUint16(icmp + 6));
+        }
+    }
+    LogPacketHex(direction, data, length);
 }
 
 void LogIpv4Packet(const char *direction, const uint8_t *data, uint16_t length, bool bound,
