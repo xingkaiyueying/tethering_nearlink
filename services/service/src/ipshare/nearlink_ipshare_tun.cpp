@@ -119,21 +119,22 @@ void NearlinkIpShareTun::Close()
 int32_t NearlinkIpShareTun::Write(const uint8_t *data, uint16_t length)
 {
     if (data == nullptr || length == 0) {
-        HILOGE("[IpShare][Tun] write rejected: invalid packet");
+        HILOGE("[DHCP][IpShare][Tun] write rejected: invalid packet");
         return -EINVAL;
     }
     std::lock_guard<std::mutex> lock(mutex_);
     if (fd_ < 0) {
-        HILOGE("[IpShare][Tun] write failed: interface is closed");
+        HILOGE("[DHCP][IpShare][Tun] write failed: interface is closed");
         return -ENODEV;
     }
     ssize_t written = write(fd_, data, length);
     if (written == length) {
+        HILOGI("[DHCP][IpShare][Tun] packet written to kernel length=%{public}u", length);
         return 0;
     }
     int32_t ret = written < 0 ? -errno : -EIO;
-    HILOGE("[IpShare][Tun] write failed expected=%{public}u written=%{public}zd ret=%{public}d", length, written,
-        ret);
+    HILOGE("[DHCP][IpShare][Tun] write failed expected=%{public}u written=%{public}zd ret=%{public}d", length,
+        written, ret);
     return ret;
 }
 
@@ -161,7 +162,7 @@ void NearlinkIpShareTun::ReadLoop()
         struct pollfd pollFd = {.fd = fd, .events = POLLIN, .revents = 0};
         int pollResult = poll(&pollFd, 1, 200);
         if (pollResult < 0) {
-            HILOGE("[IpShare][Tun] poll failed errno=%{public}d", errno);
+            HILOGE("[DHCP][IpShare][Tun] poll failed errno=%{public}d", errno);
             continue;
         }
         if (pollResult == 0 || (pollFd.revents & POLLIN) == 0) {
@@ -169,13 +170,14 @@ void NearlinkIpShareTun::ReadLoop()
         }
         ssize_t length = read(fd, packet, sizeof(packet));
         if (length > 0 && length <= static_cast<ssize_t>(UINT16_MAX) && callback) {
+            HILOGI("[DHCP][IpShare][Tun] packet read from kernel length=%{public}zd", length);
             callback(packet, static_cast<uint16_t>(length));
         } else if (length < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            HILOGE("[IpShare][Tun] read failed errno=%{public}d", errno);
+            HILOGE("[DHCP][IpShare][Tun] read failed errno=%{public}d", errno);
         } else if (length > static_cast<ssize_t>(UINT16_MAX)) {
-            HILOGE("[IpShare][Tun] read rejected: packet too large length=%{public}zd", length);
+            HILOGE("[DHCP][IpShare][Tun] read rejected: packet too large length=%{public}zd", length);
         } else if (length > 0 && !callback) {
-            HILOGE("[IpShare][Tun] read dropped: packet callback is null");
+            HILOGE("[DHCP][IpShare][Tun] read dropped: packet callback is null");
         }
     }
     HILOGI("[IpShare][Tun] read loop stopped");
