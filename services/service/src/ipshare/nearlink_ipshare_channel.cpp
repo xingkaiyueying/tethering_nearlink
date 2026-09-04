@@ -29,10 +29,70 @@ constexpr uint8_t DHCP_OPTION_MESSAGE_TYPE = 53;
 constexpr uint8_t DHCP_OPTION_END = 255;
 constexpr uint8_t DHCP_MESSAGE_ACK = 5;
 constexpr uint8_t DHCP_MAGIC_COOKIE[] = {99, 130, 83, 99};
+constexpr uint16_t TUN_PI_HEADER_LENGTH = 4;
+constexpr uint16_t ETHERNET_HEADER_LENGTH = 14;
+constexpr uint16_t ETHER_TYPE_IPV4 = 0x0800;
+
+struct Ipv4PacketView {
+    const uint8_t *data = nullptr;
+    uint16_t length = 0;
+    uint16_t offset = 0;
+};
 
 uint16_t ReadUint16(const uint8_t *data)
 {
     return static_cast<uint16_t>((static_cast<uint16_t>(data[0]) << 8) | data[1]);
+}
+
+bool SelectIpv4Packet(const uint8_t *data, uint16_t length, uint16_t offset, Ipv4PacketView &view)
+{
+    if (data == nullptr || offset > length || length - offset < 20) {
+        return false;
+    }
+    const uint8_t *candidate = data + offset;
+    uint16_t available = static_cast<uint16_t>(length - offset);
+    if ((candidate[0] >> 4) != IPV4_VERSION || (candidate[0] & 0x0F) < IPV4_MIN_IHL) {
+        return false;
+    }
+    uint16_t headerLen = static_cast<uint16_t>((candidate[0] & 0x0F) * 4);
+    uint16_t totalLen = ReadUint16(candidate + 2);
+    if (headerLen > available || totalLen < headerLen || totalLen > available || totalLen > IPOSL_MTU) {
+        return false;
+    }
+    view.data = candidate;
+    view.length = totalLen;
+    view.offset = offset;
+    return true;
+}
+
+bool ResolveIpv4Packet(const uint8_t *data, uint16_t length, Ipv4PacketView &view)
+{
+    if (data == nullptr) {
+        return false;
+    }
+    if (SelectIpv4Packet(data, length, 0, view)) {
+        return true;
+    }
+    if (SelectIpv4Packet(data, length, TUN_PI_HEADER_LENGTH, view)) {
+        return true;
+    }
+    if (length > ETHERNET_HEADER_LENGTH && ReadUint16(data + 12) == ETHER_TYPE_IPV4 &&
+        SelectIpv4Packet(data, length, ETHERNET_HEADER_LENGTH, view)) {
+        return true;
+    }
+    return false;
+}
+
+void LogUnrecognizedPacket(const char *direction, const uint8_t *data, uint16_t length)
+{
+    if (data == nullptr || length < 8) {
+        HILOGW("[DHCP][IpShare][Packet] %{public}s unrecognized payload length=%{public}u", direction, length);
+        return;
+    }
+    HILOGW("[DHCP][IpShare][Packet] %{public}s unrecognized payload length=%{public}u version=%{public}u "
+        "head=%{public}02x:%{public}02x:%{public}02x:%{public}02x:%{public}02x:%{public}02x:%{public}02x:"
+        "%{public}02x", direction, length, data[0] >> 4, data[0], data[1], data[2], data[3], data[4], data[5],
+        data[6], data[7]);
 }
 
 void LogIpv4Packet(const char *direction, const uint8_t *data, uint16_t length, bool bound,
@@ -291,19 +351,28 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
         }
         bound = dhcpBound_;
     }
-    LogIpv4Packet("RX DTAP->TUN", data, static_cast<uint16_t>(dataLen), bound, info->lcid, info->tcid);
-    if (!ValidateIpv4(data, static_cast<uint16_t>(dataLen), bound)) {
-        HILOGW("[DHCP][IpShare][RX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d",
-            dataLen, bound);
+    Ipv4PacketView view;
+    if (!ResolveIpv4Packet(data, static_cast<uint16_t>(dataLen), view)) {
+        LogUnrecognizedPacket("RX DTAP->TUN", data, static_cast<uint16_t>(dataLen));
         return -1;
     }
-    bool dhcpAck = !bound && IsDhcpAck(data, static_cast<uint16_t>(dataLen));
-    int32_t ret = tun_.Write(data, static_cast<uint16_t>(dataLen));
+    if (view.offset != 0 || view.length != dataLen) {
+        HILOGI("[DHCP][IpShare][RX] normalized IPv4 payload offset=%{public}u input=%{public}u output=%{public}u",
+            view.offset, dataLen, view.length);
+    }
+    LogIpv4Packet("RX DTAP->TUN", view.data, view.length, bound, info->lcid, info->tcid);
+    if (!ValidateIpv4(view.data, view.length, bound)) {
+        HILOGW("[DHCP][IpShare][RX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d",
+            view.length, bound);
+        return -1;
+    }
+    bool dhcpAck = !bound && IsDhcpAck(view.data, view.length);
+    int32_t ret = tun_.Write(view.data, view.length);
     if (ret != 0) {
-        HILOGE("[DHCP][IpShare][RX] delivery to TUN failed ret=%{public}d length=%{public}u", ret, dataLen);
+        HILOGE("[DHCP][IpShare][RX] delivery to TUN failed ret=%{public}d length=%{public}u", ret, view.length);
         return ret;
     }
-    HILOGI("[DHCP][IpShare][RX] packet delivered to TUN length=%{public}u", dataLen);
+    HILOGI("[DHCP][IpShare][RX] packet delivered to TUN length=%{public}u", view.length);
     if (dhcpAck) {
         HILOGI("[DHCP][IpShare][RX] DHCP ACK delivered; enabling post-DHCP IPv4 traffic");
         SetDhcpBound(true);
@@ -326,25 +395,34 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
         tcid = tcid_;
         bound = dhcpBound_;
     }
-    LogIpv4Packet("TX TUN->DTAP", data, length, bound, lcid, tcid);
-    if (!ValidateIpv4(data, length, bound)) {
+    Ipv4PacketView view;
+    if (!ResolveIpv4Packet(data, length, view)) {
+        LogUnrecognizedPacket("TX TUN->DTAP", data, length);
+        return -1;
+    }
+    if (view.offset != 0 || view.length != length) {
+        HILOGI("[DHCP][IpShare][TX] normalized IPv4 payload offset=%{public}u input=%{public}u output=%{public}u",
+            view.offset, length, view.length);
+    }
+    LogIpv4Packet("TX TUN->DTAP", view.data, view.length, bound, lcid, tcid);
+    if (!ValidateIpv4(view.data, view.length, bound)) {
         HILOGW("[DHCP][IpShare][TX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d",
-            length, bound);
+            view.length, bound);
         return -1;
     }
-    bool dhcpAck = !bound && IsDhcpAck(data, length);
-    SDF_Buff_S *buffer = SDF_BuffNewWithReserve(length);
+    bool dhcpAck = !bound && IsDhcpAck(view.data, view.length);
+    SDF_Buff_S *buffer = SDF_BuffNewWithReserve(view.length);
     if (buffer == nullptr) {
-        HILOGE("[DHCP][IpShare][TX] packet failed: buffer allocation length=%{public}u", length);
+        HILOGE("[DHCP][IpShare][TX] packet failed: buffer allocation length=%{public}u", view.length);
         return -1;
     }
-    uint8_t *payload = SDF_BuffAppend(buffer, length);
+    uint8_t *payload = SDF_BuffAppend(buffer, view.length);
     if (payload == nullptr) {
         SDF_BuffFree(buffer);
-        HILOGE("[DHCP][IpShare][TX] packet failed: buffer append length=%{public}u", length);
+        HILOGE("[DHCP][IpShare][TX] packet failed: buffer append length=%{public}u", view.length);
         return -1;
     }
-    (void)memcpy(payload, data, length);
+    (void)memcpy(payload, view.data, view.length);
     DTAP_Data_S packet = {.pi = DTAP_PI_IPV4, .lcid = lcid, .tcid = tcid, .buff = buffer};
     int32_t ret = DTAP_DataSend(&packet);
     if (ret != 0) {
@@ -354,7 +432,7 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
         return -1;
     }
     HILOGI("[DHCP][IpShare][TX] packet accepted by DTAP length=%{public}u lcid=%{public}u tcid=%{public}u",
-        length, lcid, tcid);
+        view.length, lcid, tcid);
     if (dhcpAck) {
         HILOGI("[DHCP][IpShare][TX] DHCP ACK sent; enabling post-DHCP IPv4 traffic");
         SetDhcpBound(true);
