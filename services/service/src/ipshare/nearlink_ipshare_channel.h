@@ -43,6 +43,7 @@ private:
     int Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
     int32_t Send(const uint8_t *data, uint16_t length);
     static bool ValidateIpv4(const uint8_t *data, uint16_t length, bool dhcpBound);
+    static bool IsDhcpAck(const uint8_t *data, uint16_t length);
 
     std::mutex mutex_;
     NearlinkIpShareTun tun_;
