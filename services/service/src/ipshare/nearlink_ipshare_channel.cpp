@@ -109,16 +109,24 @@ int32_t NearlinkIpShareChannel::CreateTun()
     return 0;
 }
 
-void NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressType)
+int32_t NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressType)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (peer != nullptr) {
-        (void)memcpy(peer_, peer, sizeof(peer_));
-    } else {
-        HILOGE("[IpShare][Channel] peer update ignored: peer is null");
+    // QoSM has no creation request ID. Do not reuse the binding until old work is drained.
+    if (peer == nullptr || !initialized_ || channelPending_ || channelEstablished_ || releasing_ || active_) {
+        return -1;
     }
+    (void)memcpy(peer_, peer, sizeof(peer_));
     addressType_ = addressType;
-    HILOGI("[IpShare][Channel] peer context updated addressType=%{public}u", addressType);
+    active_ = true;
+    ++generation_;
+    return 0;
+}
+
+bool NearlinkIpShareChannel::IsCurrentGeneration(uint64_t generation)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return active_ && generation == generation_;
 }
 
 int32_t NearlinkIpShareChannel::Open(const uint8_t peer[6], uint8_t addressType)
@@ -130,7 +138,8 @@ int32_t NearlinkIpShareChannel::Open(const uint8_t peer[6], uint8_t addressType)
     QOSM_TransChannelParams_S params = {};
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!initialized_ || channelPending_ || channelEstablished_) {
+        if (!initialized_ || !active_ || releasing_ || channelPending_ || channelEstablished_ ||
+            memcmp(peer_, peer, sizeof(peer_)) != 0 || addressType_ != addressType) {
             HILOGE("[IpShare][Channel] open rejected initialized=%{public}d pending=%{public}d established=%{public}d",
                 initialized_, channelPending_, channelEstablished_);
             return -1;
@@ -167,16 +176,19 @@ void NearlinkIpShareChannel::Close()
     bool destroy = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (channelEstablished_) {
+        if (active_) {
+            active_ = false;
+            ++generation_;
+        }
+        if (channelEstablished_ || releasing_) {
             (void)memcpy(release.addr.addr, peer_, sizeof(peer_));
             release.addr.type = addressType_;
             release.tcid = tcid_;
             destroy = true;
+            releasing_ = true;
         }
-        channelPending_ = false;
+        // Retain pending creation and release identity for late completion and repeated Stop.
         channelEstablished_ = false;
-        lcid_ = 0;
-        tcid_ = 0;
         dhcpBound_ = false;
     }
     if (destroy) {
@@ -212,8 +224,11 @@ bool NearlinkIpShareChannel::CanAccept(uint16_t port)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     const uint8_t emptyPeer[6] = {0};
-    return IsIpSharePort(port) && initialized_ && tun_.IsOpen() &&
+    bool accept = IsIpSharePort(port) && initialized_ && active_ && !releasing_ &&
+        !channelPending_ && !channelEstablished_ && tun_.IsOpen() &&
         memcmp(peer_, emptyPeer, sizeof(peer_)) != 0;
+    if (accept) channelPending_ = true; // Passive creation has the same late-completion race as Open.
+    return accept;
 }
 
 bool NearlinkIpShareChannel::HandleChannelStatus(const QOSM_TransChannelRspParams_S *params)
@@ -228,43 +243,65 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
     }
     StateCallback callback;
     bool established = false;
+    bool destroy = false;
     int32_t error = 0;
+    uint64_t generation = 0;
+    QOSM_TransChannelReleaseParams_S release = {};
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!initialized_ || memcmp(params->addr.addr, peer_, sizeof(peer_)) != 0 ||
-            params->addr.type != addressType_) {
+        if (memcmp(params->addr.addr, peer_, sizeof(peer_)) != 0 || params->addr.type != addressType_) {
             return false;
         }
-        callback = callback_;
-        channelPending_ = false;
         if (params->status == QOSM_TRANS_CHANNEL_ESTABLISHED) {
-            lcid_ = params->lcid;
-            tcid_ = params->tcid;
-            channelEstablished_ = true;
-            established = true;
-        } else if (params->status == QOSM_TRANS_CHANNEL_ESTABLISH_FAIL ||
+            if (channelEstablished_ && (lcid_ != params->lcid || tcid_ != params->tcid)) {
+                // An unrelated success must never replace the current channel.
+                release.addr = params->addr;
+                release.tcid = params->tcid;
+                destroy = true;
+            } else {
+                channelPending_ = false;
+                lcid_ = params->lcid;
+                tcid_ = params->tcid;
+                if (!initialized_ || !active_ || releasing_) {
+                    releasing_ = true;
+                    release.addr = params->addr;
+                    release.tcid = tcid_;
+                    destroy = true;
+                } else {
+                    channelEstablished_ = true;
+                    established = true;
+                    callback = callback_;
+                }
+            }
+        } else if (params->status == QOSM_TRANS_CHANNEL_ESTABLISH_FAIL) {
+            if (!channelPending_) return true;
+            channelPending_ = false;
+            if (active_) {
+                callback = callback_;
+                error = -1;
+            }
+        } else if (params->status == QOSM_TRANS_CHANNEL_RELEASED ||
             params->status == QOSM_TRANS_CHANNEL_RELEASE_FAIL) {
+            if ((!channelEstablished_ && !releasing_) || params->lcid != lcid_ || params->tcid != tcid_) {
+                return true;
+            }
+            // Keep release failures retryable; QoSM removes its record only on RELEASED.
+            releasing_ = params->status == QOSM_TRANS_CHANNEL_RELEASE_FAIL;
             channelEstablished_ = false;
-            error = -1;
-        } else if (params->status == QOSM_TRANS_CHANNEL_RELEASED) {
-            channelEstablished_ = false;
-            error = -1;
+            dhcpBound_ = false;
+            if (active_) {
+                callback = callback_;
+                error = -1;
+            }
         }
+        generation = generation_;
     }
-    if (established) {
-        HILOGI("[IpShare][Channel] QoSM status established lcid=%{public}u tcid=%{public}u",
-            params->lcid, params->tcid);
-    } else if (error != 0) {
-        HILOGE("[IpShare][Channel] QoSM status failed status=%{public}d lcid=%{public}u tcid=%{public}u",
-            params->status, params->lcid, params->tcid);
-    } else {
-        HILOGI("[IpShare][Channel] QoSM status received status=%{public}d", params->status);
+    if (destroy) {
+        int32_t ret = QOSM_TransChannelDestroy(&release);
+        HILOGI("[IpShare][Channel] late/cancelled channel cleanup tcid=%{public}u ret=%{public}d",
+            release.tcid, ret);
     }
-    if (callback) {
-        callback(established, error);
-    } else {
-        HILOGE("[IpShare][Channel] QoSM status dropped: state callback is null");
-    }
+    if (callback) callback(established, error, generation);
     return true;
 }
 
@@ -284,7 +321,7 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
     bool bound = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!channelEstablished_ || info->lcid != lcid_ || info->tcid != tcid_ || dataLen > UINT16_MAX) {
+        if (!active_ || !channelEstablished_ || info->lcid != lcid_ || info->tcid != tcid_ || dataLen > UINT16_MAX) {
             HILOGW("[DHCP][IpShare][RX] packet rejected: channel mismatch lcid=%{public}u tcid=%{public}u "
                 "length=%{public}u", info->lcid, info->tcid, dataLen);
             return -1;
@@ -325,7 +362,7 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
     bool bound = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!channelEstablished_) {
+        if (!active_ || !channelEstablished_) {
             HILOGW("[DHCP][IpShare][TX] packet rejected: QoSM channel not established");
             return -1;
         }

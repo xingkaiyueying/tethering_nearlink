@@ -52,8 +52,12 @@ int32_t NearlinkIpShareService::Initialize()
         HILOGE("[IpShare][Service] initialize failed at IPoSL profile ret=%{public}d", profileRet);
         return IP_SHARE_PROFILE_FAILED;
     }
-    int32_t channelRet = NearlinkIpShareChannel::GetInstance().Initialize([this](bool established, int32_t error) {
-        DoInIpShareThread([this, established, error]() { HandleChannelState(established, error); });
+    int32_t channelRet = NearlinkIpShareChannel::GetInstance().Initialize([this](bool established, int32_t error, uint64_t generation) {
+        DoInIpShareThread([this, established, error, generation]() {
+            if (NearlinkIpShareChannel::GetInstance().IsCurrentGeneration(generation)) {
+                HandleChannelState(established, error);
+            }
+        });
     });
     if (channelRet != 0) {
         HILOGE("[IpShare][Service] initialize failed at IPv4 channel ret=%{public}d", channelRet);
@@ -188,12 +192,20 @@ int32_t NearlinkIpShareService::BeginRole(NearlinkIpShareRole role, const std::s
     sptr<INearlinkIpShareObserver> observer;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (initialized_ && status_.role == role && memcmp(peer_, peer, sizeof(peer_)) == 0 &&
+            addressType_ == addressType && status_.state != NearlinkIpShareState::STOPPING &&
+            status_.state != NearlinkIpShareState::ERROR && status_.state != NearlinkIpShareState::IDLE) {
+            return 1; // Already running: caller returns success without dispatching another start.
+        }
         if (!initialized_ || probeInProgress_ || status_.state != NearlinkIpShareState::IDLE ||
             status_.role != NearlinkIpShareRole::NONE) {
             HILOGE("[IpShare][Service] role start rejected initialized=%{public}d probe=%{public}d role=%{public}d "
                 "state=%{public}d", initialized_, probeInProgress_, static_cast<int32_t>(status_.role),
                 static_cast<int32_t>(status_.state));
             return IP_SHARE_INVALID_STATE;
+        }
+        if (NearlinkIpShareChannel::GetInstance().SetPeer(peer, addressType) != 0) {
+            return IP_SHARE_INVALID_STATE; // Cancelled QoSM work is still draining; retry later.
         }
         status_ = {};
         status_.role = role;
@@ -219,10 +231,9 @@ int32_t NearlinkIpShareService::StartGateway(const std::string &peerAddress)
     int32_t ret = ValidateSecurePeer(peerAddress, peer, addressType);
     if (ret != IP_SHARE_OK ||
         (ret = BeginRole(NearlinkIpShareRole::GATEWAY, peerAddress, peer, addressType)) != IP_SHARE_OK) {
-        HILOGE("[IpShare][Service] gateway start rejected ret=%{public}d", ret);
-        return ret;
+        HILOGI("[IpShare][Service] gateway start result=%{public}d", ret);
+        return ret == 1 ? IP_SHARE_OK : ret;
     }
-    NearlinkIpShareChannel::GetInstance().SetPeer(peer, addressType);
     auto peerCopy = std::array<uint8_t, 6> {};
     (void)memcpy(peerCopy.data(), peer, peerCopy.size());
     DoInIpShareThread([this, peerCopy, addressType]() {
@@ -255,10 +266,9 @@ int32_t NearlinkIpShareService::StartTerminal(const std::string &gatewayAddress)
     int32_t ret = ValidateSecurePeer(gatewayAddress, peer, addressType);
     if (ret != IP_SHARE_OK ||
         (ret = BeginRole(NearlinkIpShareRole::TERMINAL, gatewayAddress, peer, addressType)) != IP_SHARE_OK) {
-        HILOGE("[IpShare][Service] terminal start rejected ret=%{public}d", ret);
-        return ret;
+        HILOGI("[IpShare][Service] terminal start result=%{public}d", ret);
+        return ret == 1 ? IP_SHARE_OK : ret;
     }
-    NearlinkIpShareChannel::GetInstance().SetPeer(peer, addressType);
     SLE_Addr_S local = SleProperties::GetInstance().GetLocalSleAddress();
     auto peerCopy = std::array<uint8_t, 6> {};
     auto localCopy = std::array<uint8_t, 6> {};
@@ -285,10 +295,7 @@ int32_t NearlinkIpShareService::Stop()
             HILOGE("[IpShare][Service] stop rejected: not initialized");
             return IP_SHARE_INVALID_STATE;
         }
-        if (status_.state == NearlinkIpShareState::IDLE) {
-            HILOGI("[IpShare][Service] stop completed: already idle");
-            return IP_SHARE_OK;
-        }
+        if (status_.state == NearlinkIpShareState::STOPPING) return IP_SHARE_OK;
         status_.state = NearlinkIpShareState::STOPPING;
     }
     HILOGI("[IpShare][Service] stop dispatched");

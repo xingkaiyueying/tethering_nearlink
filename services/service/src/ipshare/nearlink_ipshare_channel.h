@@ -19,7 +19,7 @@ namespace OHOS::Nearlink {
 class NearlinkIpShareChannel final {
 public:
     static constexpr uint16_t IP_SHARE_PORT = 30200;
-    using StateCallback = std::function<void(bool, int32_t)>;
+    using StateCallback = std::function<void(bool, int32_t, uint64_t)>;
 
     static NearlinkIpShareChannel &GetInstance();
 
@@ -28,8 +28,9 @@ public:
     int32_t CreateTun();
     int32_t Open(const uint8_t peer[6], uint8_t addressType);
     void Close();
-    void SetPeer(const uint8_t peer[6], uint8_t addressType);
+    int32_t SetPeer(const uint8_t peer[6], uint8_t addressType);
     void SetDhcpBound(bool bound);
+    bool IsCurrentGeneration(uint64_t generation);
 
     static bool IsIpSharePort(uint16_t port);
     static bool IsAcceptingPort(uint16_t port);
@@ -52,6 +53,9 @@ private:
     uint8_t addressType_ {0};
     uint16_t lcid_ {0};
     uint8_t tcid_ {0};
+    uint64_t generation_ {0};
+    bool active_ {false};
+    bool releasing_ {false};
     bool initialized_ {false};
     bool channelPending_ {false};
     bool channelEstablished_ {false};

@@ -12,6 +12,24 @@
 #include "iposl_profile.h"
 #include "nearlink_ipshare_client_c.h"
 
+#include "accesstoken_kit.h"
+#include "nativetoken_kit.h"
+#include "token_setproc.h"
+
+static int SetProbeToken(void)
+{
+    const char *permissions[] = { "ohos.permission.ACCESS_NEARLINK", "ohos.permission.CONNECTIVITY_INTERNAL" };
+    NativeTokenInfoParams info = {};
+    info.permsNum = sizeof(permissions) / sizeof(permissions[0]);
+    info.perms = permissions;
+    info.processName = "sleip_nearlink_stage1";
+    info.aplStr = "system_core";
+    uint64_t token = GetAccessTokenId(&info);
+    if (token == 0) return -1;
+    int ret = SetSelfTokenID(token);
+    return ret == 0 ? OHOS::Security::AccessToken::AccessTokenKit::ReloadNativeTokenInfo() : ret;
+}
+
 #define WAIT_COUNT 300
 #define WAIT_INTERVAL_US 200000
 
@@ -94,7 +112,7 @@ static int RunSupport(const char *address)
 
 static void Usage(const char *program)
 {
-    fprintf(stderr, "usage: %s vector|status|stop|support ADDRESS|gateway-start ADDRESS|terminal-start ADDRESS\n",
+    fprintf(stderr, "usage: %s [--no-token] vector|status|stop|support ADDRESS|gateway-start ADDRESS|terminal-start ADDRESS\n",
         program);
 }
 
@@ -102,6 +120,13 @@ int main(int argc, char *argv[])
 {
     if (argc == 2 && strcmp(argv[1], "vector") == 0) {
         return RunVector();
+    }
+    if (argc > 1 && strcmp(argv[1], "--no-token") == 0) {
+        --argc;
+        ++argv;
+    } else if (SetProbeToken() != 0) {
+        printf("RESULT=FAIL state=AUTH code=-1\n");
+        return 1;
     }
     if (argc == 2 && strcmp(argv[1], "status") == 0) {
         return PrintStatusResult(0, true);
