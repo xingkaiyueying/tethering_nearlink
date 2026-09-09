@@ -190,6 +190,8 @@ void NearlinkIpShareChannel::Close()
         // Retain pending creation and release identity for late completion and repeated Stop.
         channelEstablished_ = false;
         dhcpBound_ = false;
+        dhcpRequest_ = false;
+        boundIp_ = 0;
     }
     if (destroy) {
         int32_t ret = QOSM_TransChannelDestroy(&release);
@@ -319,6 +321,7 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
     const uint8_t *data = SDF_DataOffset(buffer);
     uint32_t dataLen = SDF_DataLenGet(buffer);
     bool bound = false;
+    uint64_t generation = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!active_ || !channelEstablished_ || info->lcid != lcid_ || info->tcid != tcid_ || dataLen > UINT16_MAX) {
@@ -326,7 +329,8 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
                 "length=%{public}u", info->lcid, info->tcid, dataLen);
             return -1;
         }
-        bound = dhcpBound_;
+        bound = DhcpBoundLocked();
+        generation = generation_;
     }
     uint16_t length = static_cast<uint16_t>(dataLen);
     if (!ValidateIpv4(data, length, true)) {
@@ -341,17 +345,13 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
             length, bound);
         return -1;
     }
-    bool dhcpAck = !bound && IsDhcpAck(data, length);
     int32_t ret = tun_.Write(data, length);
     if (ret != 0) {
         HILOGE("[DHCP][IpShare][RX] delivery to TUN failed ret=%{public}d length=%{public}u", ret, length);
         return ret;
     }
     HILOGI("[DHCP][IpShare][RX] packet delivered to TUN length=%{public}u", length);
-    if (dhcpAck) {
-        HILOGI("[DHCP][IpShare][RX] DHCP ACK delivered; enabling post-DHCP IPv4 traffic");
-        SetDhcpBound(true);
-    }
+    ObserveDhcp(data, length, generation);
     return 0;
 }
 
@@ -360,6 +360,7 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
     uint16_t lcid = 0;
     uint8_t tcid = 0;
     bool bound = false;
+    uint64_t generation = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!active_ || !channelEstablished_) {
@@ -368,7 +369,8 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
         }
         lcid = lcid_;
         tcid = tcid_;
-        bound = dhcpBound_;
+        bound = DhcpBoundLocked();
+        generation = generation_;
     }
     if (!ValidateIpv4(data, length, true)) {
         uint8_t version = data == nullptr || length == 0 ? 0 : data[0] >> 4;
@@ -382,7 +384,6 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
             length, bound);
         return -1;
     }
-    bool dhcpAck = !bound && IsDhcpAck(data, length);
     SDF_Buff_S *buffer = SDF_BuffNewWithReserve(length);
     if (buffer == nullptr) {
         HILOGE("[DHCP][IpShare][TX] packet failed: buffer allocation length=%{public}u", length);
@@ -405,60 +406,103 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
     }
     HILOGI("[DHCP][IpShare][TX] packet accepted by DTAP length=%{public}u lcid=%{public}u tcid=%{public}u",
         length, lcid, tcid);
-    if (dhcpAck) {
-        HILOGI("[DHCP][IpShare][TX] DHCP ACK sent; enabling post-DHCP IPv4 traffic");
-        SetDhcpBound(true);
-    }
+    ObserveDhcp(data, length, generation);
     return 0;
 }
 
-bool NearlinkIpShareChannel::IsDhcpAck(const uint8_t *data, uint16_t length)
+bool NearlinkIpShareChannel::DhcpBoundLocked()
 {
-    if (data == nullptr || length < 20 || (data[0] >> 4) != IPV4_VERSION) {
-        return false;
+    if (dhcpBound_ && std::chrono::steady_clock::now() >= leaseExpiry_) {
+        dhcpBound_ = false;
+        boundIp_ = 0;
     }
-    uint16_t headerLen = static_cast<uint16_t>((data[0] & 0x0F) * 4);
-    if (headerLen < IPV4_MIN_IHL * 4 || data[9] != IPV4_PROTOCOL_UDP ||
-        length < headerLen + UDP_HEADER_LENGTH + DHCP_OPTIONS_OFFSET) {
-        return false;
-    }
-    uint16_t sourcePort = static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen]) << 8) |
-        data[headerLen + 1]);
-    uint16_t destinationPort = static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen + 2]) << 8) |
-        data[headerLen + 3]);
-    if (sourcePort != DHCP_SERVER_PORT || destinationPort != DHCP_CLIENT_PORT) {
-        return false;
-    }
-    uint16_t udpLength = static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen + 4]) << 8) |
-        data[headerLen + 5]);
-    if (udpLength < UDP_HEADER_LENGTH + DHCP_OPTIONS_OFFSET || headerLen + udpLength > length) {
-        return false;
-    }
-    const uint8_t *dhcp = data + headerLen + UDP_HEADER_LENGTH;
-    uint16_t dhcpLength = static_cast<uint16_t>(udpLength - UDP_HEADER_LENGTH);
-    if (dhcp[0] != DHCP_BOOT_REPLY ||
-        memcmp(dhcp + DHCP_MAGIC_COOKIE_OFFSET, DHCP_MAGIC_COOKIE, sizeof(DHCP_MAGIC_COOKIE)) != 0) {
-        return false;
-    }
-    uint16_t offset = DHCP_OPTIONS_OFFSET;
-    while (offset < dhcpLength) {
+    return dhcpBound_;
+}
+
+void NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation)
+{
+    if (!ValidateIpv4(data, length, false)) return;
+    uint16_t header = (data[0] & 0x0f) * 4;
+    uint16_t udpLength = ReadUint16(data + header + 4);
+    if (udpLength < UDP_HEADER_LENGTH + DHCP_OPTIONS_OFFSET || header + udpLength != length) return;
+    auto sumWords = [](const uint8_t *bytes, uint16_t size, uint32_t sum) {
+        for (uint16_t i = 0; i < size; i += 2) {
+            sum += uint32_t(bytes[i]) << 8;
+            if (i + 1 < size) sum += bytes[i + 1];
+        }
+        while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+        return sum;
+    };
+    if (sumWords(data, header, 0) != 0xffff) return;
+    if (ReadUint16(data + header + 6) != 0 &&
+        sumWords(data + header, udpLength, sumWords(data + 12, 8, IPV4_PROTOCOL_UDP + udpLength)) != 0xffff) return;
+    const uint8_t *dhcp = data + header + UDP_HEADER_LENGTH;
+    uint16_t end = udpLength - UDP_HEADER_LENGTH;
+    bool request = ReadUint16(data + header) == DHCP_CLIENT_PORT;
+    if (dhcp[0] != (request ? 1 : DHCP_BOOT_REPLY) || dhcp[1] != 1 || dhcp[2] != 6 ||
+        memcmp(dhcp + DHCP_MAGIC_COOKIE_OFFSET, DHCP_MAGIC_COOKIE, sizeof(DHCP_MAGIC_COOKIE)) != 0) return;
+    auto read32 = [](const uint8_t *p) -> uint32_t {
+        return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
+    };
+    auto unicast = [](uint32_t ip) { return ip != 0 && (ip >> 24) != 0 && (ip >> 24) != 127 &&
+        (ip >> 24) < 224 && (ip & 0xff) != 255; };
+    uint8_t message = 0;
+    uint32_t requested = read32(dhcp + 12), server = 0, lease = 0;
+    bool haveRequested = false, haveServer = false, haveLease = false;
+    bool ended = false;
+    for (uint16_t offset = DHCP_OPTIONS_OFFSET; offset < end;) {
         uint8_t option = dhcp[offset++];
-        if (option == DHCP_OPTION_PAD) {
-            continue;
-        }
-        if (option == DHCP_OPTION_END || offset >= dhcpLength) {
-            return false;
-        }
-        uint8_t optionLength = dhcp[offset++];
-        if (optionLength > dhcpLength - offset) {
-            return false;
-        }
+        if (option == DHCP_OPTION_PAD) continue;
+        if (option == DHCP_OPTION_END) { ended = true; break; }
+        if (offset == end) return;
+        uint8_t count = dhcp[offset++];
+        if (count > end - offset) return;
         if (option == DHCP_OPTION_MESSAGE_TYPE) {
-            return optionLength == 1 && dhcp[offset] == DHCP_MESSAGE_ACK;
+            if (message != 0 || count != 1) return;
+            message = dhcp[offset];
+        } else if (option == 50) {
+            if (haveRequested || count != 4) return;
+            requested = read32(dhcp + offset);
+            haveRequested = true;
+        } else if (option == 54) {
+            if (haveServer || count != 4) return;
+            server = read32(dhcp + offset);
+            haveServer = true;
+        } else if (option == 51) {
+            if (haveLease || count != 4) return;
+            lease = read32(dhcp + offset);
+            haveLease = true;
         }
-        offset = static_cast<uint16_t>(offset + optionLength);
+        offset += count;
     }
-    return false;
+    if (!ended) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || !channelEstablished_ || generation != generation_) return;
+    if (request && (message == 1 || message == 4 || message == 7)) {
+        dhcpBound_ = false;
+        boundIp_ = 0;
+        dhcpRequest_ = false;
+    } else if (request && message == 3 && unicast(requested)) {
+        memcpy(dhcpKey_, dhcp + 28, sizeof(dhcpKey_));
+        dhcpXid_ = read32(dhcp + 4);
+        requestedIp_ = requested;
+        serverIp_ = server;
+        dhcpRequest_ = true;
+    } else if (!request && dhcpRequest_ && read32(dhcp + 4) == dhcpXid_ &&
+        memcmp(dhcpKey_, dhcp + 28, sizeof(dhcpKey_)) == 0 && unicast(server) &&
+        (serverIp_ == 0 || serverIp_ == server)) {
+        if (message == 6) {
+            dhcpBound_ = false;
+            boundIp_ = 0;
+            dhcpRequest_ = false;
+        } else if (message == DHCP_MESSAGE_ACK && read32(dhcp + 16) == requestedIp_ && lease != 0) {
+            boundIp_ = requestedIp_;
+            leaseExpiry_ = std::chrono::steady_clock::now() + std::chrono::seconds(lease);
+            dhcpBound_ = true;
+            dhcpRequest_ = false;
+            HILOGI("[DHCP][IpShare] matched REQUEST/ACK; IPv4 packet binding established");
+        }
+    }
 }
 
 bool NearlinkIpShareChannel::ValidateIpv4(const uint8_t *data, uint16_t length, bool dhcpBound)
