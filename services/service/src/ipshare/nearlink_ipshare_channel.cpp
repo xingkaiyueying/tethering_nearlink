@@ -273,9 +273,11 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
             releasing_ = params->status == QOSM_TRANS_CHANNEL_RELEASE_FAIL;
             channelEstablished_ = false;
             dhcpBound_ = false;
+            dhcpRequest_ = false;
+            boundIp_ = 0;
             if (active_) {
                 callback = callback_;
-                error = -1;
+                error = params->status == QOSM_TRANS_CHANNEL_RELEASED ? 0 : -1;
             }
         }
         generation = generation_;
