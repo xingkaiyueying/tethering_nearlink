@@ -384,22 +384,8 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
             length, bound);
         return -1;
     }
-    SDF_Buff_S *buffer = SDF_BuffNewWithReserve(length);
-    if (buffer == nullptr) {
-        HILOGE("[DHCP][IpShare][TX] packet failed: buffer allocation length=%{public}u", length);
-        return -1;
-    }
-    uint8_t *payload = SDF_BuffAppend(buffer, length);
-    if (payload == nullptr) {
-        SDF_BuffFree(buffer);
-        HILOGE("[DHCP][IpShare][TX] packet failed: buffer append length=%{public}u", length);
-        return -1;
-    }
-    (void)memcpy(payload, data, length);
-    DTAP_Data_S packet = {.pi = DTAP_PI_IPV4, .lcid = lcid, .tcid = tcid, .buff = buffer};
-    int32_t ret = DTAP_DataSend(&packet);
+    int32_t ret = IposlProfileSendIpv4(lcid, tcid, data, length);
     if (ret != 0) {
-        SDF_BuffFree(buffer);
         HILOGE("[DHCP][IpShare][TX] DTAP send failed lcid=%{public}u tcid=%{public}u ret=%{public}d",
             lcid, tcid, ret);
         return -1;
