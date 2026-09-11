@@ -16,7 +16,6 @@ namespace {
 static_assert(DTAP_PI_IPV4 == 1, "IPoSL Demo requires IPv4 PI=0x01");
 constexpr uint8_t IPV4_VERSION = 4;
 constexpr uint8_t IPV4_MIN_IHL = 5;
-constexpr uint8_t IPV4_PROTOCOL_ICMP = 1;
 constexpr uint8_t IPV4_PROTOCOL_UDP = 17;
 constexpr uint16_t DHCP_SERVER_PORT = 67;
 constexpr uint16_t DHCP_CLIENT_PORT = 68;
@@ -35,24 +34,7 @@ uint16_t ReadUint16(const uint8_t *data)
     return static_cast<uint16_t>((static_cast<uint16_t>(data[0]) << 8) | data[1]);
 }
 
-void LogIpv4Packet(const char *direction, const uint8_t *data, uint16_t length, bool bound,
-    uint16_t lcid, uint8_t tcid)
-{
-    if (data == nullptr || length < 20) {
-        HILOGE("[DHCP][IpShare][Packet] %{public}s invalid buffer length=%{public}u", direction, length);
-        return;
-    }
-    uint16_t headerLen = static_cast<uint16_t>((data[0] & 0x0F) * 4);
-    HILOGI("[DHCP][IpShare][Packet] %{public}s IPv4 protocol=%{public}u length=%{public}u "
-        "src=%{public}u.%{public}u.%{public}u.%{public}u dst=%{public}u.%{public}u.%{public}u.%{public}u "
-        "bound=%{public}d lcid=%{public}u tcid=%{public}u", direction, data[9], length,
-        data[12], data[13], data[14], data[15], data[16], data[17], data[18], data[19], bound, lcid, tcid);
-    if (data[9] == IPV4_PROTOCOL_ICMP && headerLen <= length && length - headerLen >= 8) {
-        const uint8_t *icmp = data + headerLen;
-        HILOGI("[DHCP][IpShare][ICMP] %{public}s type=%{public}u code=%{public}u id=%{public}u seq=%{public}u",
-            direction, icmp[0], icmp[1], ReadUint16(icmp + 4), ReadUint16(icmp + 6));
-    }
-}
+
 }
 
 NearlinkIpShareChannel &NearlinkIpShareChannel::GetInstance()
@@ -339,7 +321,6 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
             length, version);
         return -1;
     }
-    LogIpv4Packet("RX DTAP->TUN", data, length, bound, info->lcid, info->tcid);
     if (!ValidateIpv4(data, length, bound)) {
         HILOGW("[DHCP][IpShare][RX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d",
             length, bound);
@@ -350,7 +331,6 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
         HILOGE("[DHCP][IpShare][RX] delivery to TUN failed ret=%{public}d length=%{public}u", ret, length);
         return ret;
     }
-    HILOGI("[DHCP][IpShare][RX] packet delivered to TUN length=%{public}u", length);
     ObserveDhcp(data, length, generation);
     return 0;
 }
@@ -378,7 +358,6 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
             length, version);
         return 0;
     }
-    LogIpv4Packet("TX TUN->DTAP", data, length, bound, lcid, tcid);
     if (!ValidateIpv4(data, length, bound)) {
         HILOGW("[DHCP][IpShare][TX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d",
             length, bound);
@@ -390,8 +369,6 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
             lcid, tcid, ret);
         return -1;
     }
-    HILOGI("[DHCP][IpShare][TX] packet accepted by DTAP length=%{public}u lcid=%{public}u tcid=%{public}u",
-        length, lcid, tcid);
     ObserveDhcp(data, length, generation);
     return 0;
 }

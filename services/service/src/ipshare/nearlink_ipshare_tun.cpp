@@ -129,7 +129,7 @@ int32_t NearlinkIpShareTun::Write(const uint8_t *data, uint16_t length)
     }
     ssize_t written = write(fd_, data, length);
     if (written == length) {
-        HILOGI("[DHCP][IpShare][Tun] packet written to kernel length=%{public}u", length);
+
         return 0;
     }
     int32_t ret = written < 0 ? -errno : -EIO;
@@ -170,7 +170,7 @@ void NearlinkIpShareTun::ReadLoop()
         }
         ssize_t length = read(fd, packet, sizeof(packet));
         if (length > 0 && length <= static_cast<ssize_t>(UINT16_MAX) && callback) {
-            HILOGI("[DHCP][IpShare][Tun] packet read from kernel length=%{public}zd", length);
+
             callback(packet, static_cast<uint16_t>(length));
         } else if (length < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             HILOGE("[DHCP][IpShare][Tun] read failed errno=%{public}d", errno);
