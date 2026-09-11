@@ -4,13 +4,25 @@
 import("//build/ohos.gni")
 import("../../nearlink_config.gni")
 
-ohos_executable("sleip_nearlink_stage1") {
+# The maintained probe is one .c file. Compile a generated copy as C++ for the token SDK.
+copy("probe_cpp_source") {
   sources = [ "sleip_nearlink_stage1.c" ]
+  outputs = [ "$target_gen_dir/sleip_nearlink_stage1.cpp" ]
+}
+
+ohos_executable("sleip_nearlink_stage1") {
+  external_deps = [
+    "access_token:libaccesstoken_sdk",
+    "access_token:libnativetoken",
+    "access_token:libtoken_setproc",
+  ]
+  sources = [ "$target_gen_dir/sleip_nearlink_stage1.cpp" ]
   include_dirs = [
     "$NEARLINK_ROOT/services/stack/src/cp/bal/iposl/interface",
     "$NEARLINK_ROOT/interfaces/inner_api/include",
   ]
   deps = [
+    ":probe_cpp_source",
     "$NEARLINK_ROOT/frameworks/native:nearlink_framework",
     "$NEARLINK_ROOT/services/stack:nearlink_stack",
   ]

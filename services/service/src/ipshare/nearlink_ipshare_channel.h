@@ -6,6 +6,7 @@
 #ifndef NEARLINK_IPSHARE_CHANNEL_H
 #define NEARLINK_IPSHARE_CHANNEL_H
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -19,7 +20,7 @@ namespace OHOS::Nearlink {
 class NearlinkIpShareChannel final {
 public:
     static constexpr uint16_t IP_SHARE_PORT = 30200;
-    using StateCallback = std::function<void(bool, int32_t)>;
+    using StateCallback = std::function<void(bool, int32_t, uint64_t)>;
 
     static NearlinkIpShareChannel &GetInstance();
 
@@ -28,8 +29,9 @@ public:
     int32_t CreateTun();
     int32_t Open(const uint8_t peer[6], uint8_t addressType);
     void Close();
-    void SetPeer(const uint8_t peer[6], uint8_t addressType);
+    int32_t SetPeer(const uint8_t peer[6], uint8_t addressType);
     void SetDhcpBound(bool bound);
+    bool IsCurrentGeneration(uint64_t generation);
 
     static bool IsIpSharePort(uint16_t port);
     static bool IsAcceptingPort(uint16_t port);
@@ -43,7 +45,15 @@ private:
     int Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
     int32_t Send(const uint8_t *data, uint16_t length);
     static bool ValidateIpv4(const uint8_t *data, uint16_t length, bool dhcpBound);
-    static bool IsDhcpAck(const uint8_t *data, uint16_t length);
+    void ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation);
+    bool DhcpBoundLocked();
+    uint8_t dhcpKey_[6] {};
+    uint32_t dhcpXid_ {0};
+    uint32_t requestedIp_ {0};
+    uint32_t serverIp_ {0};
+    uint32_t boundIp_ {0};
+    bool dhcpRequest_ {false};
+    std::chrono::steady_clock::time_point leaseExpiry_ {};
 
     std::mutex mutex_;
     NearlinkIpShareTun tun_;
@@ -52,6 +62,9 @@ private:
     uint8_t addressType_ {0};
     uint16_t lcid_ {0};
     uint8_t tcid_ {0};
+    uint64_t generation_ {0};
+    bool active_ {false};
+    bool releasing_ {false};
     bool initialized_ {false};
     bool channelPending_ {false};
     bool channelEstablished_ {false};

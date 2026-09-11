@@ -22,6 +22,12 @@ static const uint8_t g_methodUuid[16] = {
     0x7A, 0xA3, 0x12, 0x0E, 0xF0, 0xD2, 0x45, 0x60, 0xB7, 0x11, 0xA5, 0xB6, 0x18, 0xB7, 0xA3, 0x2B
 };
 
+static const uint8_t g_gatewayCapabilityUuid[16] = {
+    0x2E, 0x68, 0xC5, 0x66, 0xE3, 0x14, 0x46, 0x6D, 0x96, 0x29, 0x40, 0x2F, 0x16, 0xCA, 0xB2, 0x19
+};
+static bool g_identifierFound;
+static uint16_t g_capabilityHandle;
+
 static int32_t g_clientAppId = SSAP_APP_INVALID_ID;
 static bool g_terminal;
 static bool g_finishing;
@@ -112,6 +118,7 @@ static int32_t SendRequest(uint8_t opcode)
 
 static void OnCallMethod(int32_t appId, NLSTK_SsapClientCallMethodResult_S *response, NLSTK_Errcode_E ret)
 {
+    if (appId != g_clientAppId) return;
     uint8_t layer2[IPOSL_LAYER2_ID_LEN] = {0};
     uint8_t result = 0xFF;
     int32_t responseError = response == NULL ? IPOSL_ERR_INVALID_PARAM : response->errorCode;
@@ -140,10 +147,25 @@ static void OnCallMethod(int32_t appId, NLSTK_SsapClientCallMethodResult_S *resp
     NotifyConfigured(true, IPOSL_SUCCESS);
 }
 
+static void OnReadCapability(int32_t appId, NLSTK_SsapClientReadPropertyInfo_S *property,
+    NLSTK_Errcode_E ret)
+{
+    if (appId != g_clientAppId) return;
+    // This Demo supports the frozen IPv4 capability vector; fail closed on incompatible peers.
+    if (ret != NLSTK_ERRCODE_SUCCESS || property == NULL || property->handle != g_capabilityHandle ||
+        property->errorCode != NLSTK_ERRCODE_SUCCESS || property->value.data == NULL ||
+        property->value.len != IPOSL_GATEWAY_CAPABILITY_LEN ||
+        memcmp(property->value.data, g_iposlGatewayCapability, IPOSL_GATEWAY_CAPABILITY_LEN) != 0 ||
+        SendRequest(IPOSL_OPCODE_CONFIGURE) != IPOSL_SUCCESS) {
+        NotifyConfigured(false, IPOSL_ERR_NOT_SUPPORTED);
+        Finish(false);
+    }
+}
+
 static void OnGetServices(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_SsapServ_S *services,
     uint16_t serviceNum, NLSTK_SsapClientFreeFunc freeFunc)
 {
-    const uint8_t *expectedUuid = g_terminal ? g_configUuid : g_identifierUuid;
+    const uint8_t *expectedUuid = g_terminal && g_identifierFound ? g_configUuid : g_identifierUuid;
     if (appId != g_clientAppId) {
         NLSTK_LOG_WARN("[IpShare][IPoSL][Client] get services callback ignored appId=%d expectedAppId=%d", appId,
             g_clientAppId);
@@ -176,6 +198,27 @@ static void OnGetServices(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_SsapServ_
         Finish(false);
         return;
     }
+    if (!g_identifierFound) {
+        if (freeFunc != NULL) freeFunc(services, serviceNum);
+        g_identifierFound = true;
+        NLSTK_SsapUuid_S configUuid = {0};
+        SetUuid(&configUuid, g_configUuid);
+        if (NLSTK_SsapClientDiscoverServicesByUuid(appId, &configUuid, SSAP_START_HANDLE,
+            SSAP_END_HANDLE, FIND_STRUCTURE_TYPE_PRIMARY_SERVICE) != NLSTK_ERRCODE_SUCCESS) {
+            NotifyConfigured(false, IPOSL_ERR_NOT_SUPPORTED);
+            Finish(false);
+        }
+        return;
+    }
+    g_capabilityHandle = 0;
+    for (uint16_t i = 0; i < serviceNum; ++i) {
+        for (uint16_t j = 0; j < services[i].propertyNum; ++j) {
+            if (memcmp(services[i].properties[j].uuid.uuid, g_gatewayCapabilityUuid,
+                sizeof(g_gatewayCapabilityUuid)) == 0) {
+                g_capabilityHandle = services[i].properties[j].handle;
+            }
+        }
+    }
     g_methodHandle = 0;
     for (uint16_t i = 0; i < serviceNum && g_methodHandle == 0; ++i) {
         for (uint16_t j = 0; j < services[i].methodNum; ++j) {
@@ -188,7 +231,8 @@ static void OnGetServices(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_SsapServ_
     if (freeFunc != NULL && services != NULL) {
         freeFunc(services, serviceNum);
     }
-    if (g_methodHandle == 0 || SendRequest(IPOSL_OPCODE_CONFIGURE) != IPOSL_SUCCESS) {
+    if (g_methodHandle == 0 || g_capabilityHandle == 0 ||
+        NLSTK_SsapClientReadProperty(appId, g_capabilityHandle) != NLSTK_ERRCODE_SUCCESS) {
         NLSTK_LOG_ERROR("[IpShare][IPoSL][Client] terminal configuration unavailable methodHandle=%u", g_methodHandle);
         NotifyConfigured(false, IPOSL_ERR_NOT_SUPPORTED);
         Finish(false);
@@ -199,7 +243,8 @@ static void OnGetServices(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_SsapServ_
 
 static void OnFindServiceByUuid(int32_t appId, NLSTK_SsapUuid_S *uuid, NLSTK_Errcode_E ret)
 {
-    if (appId != g_clientAppId || uuid == NULL || ret != NLSTK_ERRCODE_SUCCESS) {
+    if (appId != g_clientAppId) return;
+    if (uuid == NULL || ret != NLSTK_ERRCODE_SUCCESS) {
         NLSTK_LOG_ERROR("[IpShare][IPoSL][Client] service discovery failed appId=%d expectedAppId=%d terminal=%d "
             "ret=%d", appId, g_clientAppId, g_terminal, ret);
         if (g_terminal) {
@@ -237,7 +282,7 @@ static void OnConnectionStateChanged(int32_t appId, uint8_t state, NLSTK_Errcode
         appId, state, ret, reason, g_terminal);
     if (state == SSAP_CONNECT_STATE_CONNECTED && ret == NLSTK_ERRCODE_SUCCESS) {
         NLSTK_SsapUuid_S uuid = {0};
-        SetUuid(&uuid, g_terminal ? g_configUuid : g_identifierUuid);
+        SetUuid(&uuid, g_terminal && g_identifierFound ? g_configUuid : g_identifierUuid);
         /* The stack derives standard/vendor UUID encoding from uuid; this argument is a find-structure type. */
         NLSTK_Errcode_E discoverRet = NLSTK_SsapClientDiscoverServicesByUuid(appId, &uuid, SSAP_START_HANDLE,
             SSAP_END_HANDLE, FIND_STRUCTURE_TYPE_PRIMARY_SERVICE);
@@ -281,6 +326,7 @@ int32_t IposlClientStart(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addres
     callbacks.onFindServiceByUuid = OnFindServiceByUuid;
     callbacks.onGetServices = OnGetServices;
     callbacks.onCallMethod = OnCallMethod;
+    callbacks.onReadProperty = OnReadCapability;
     NLSTK_Errcode_E registerRet = NLSTK_SsapClientRegApp(&g_clientAppId, &callbacks, &addr);
     if (registerRet != NLSTK_ERRCODE_SUCCESS || g_clientAppId == SSAP_APP_INVALID_ID) {
         g_clientAppId = SSAP_APP_INVALID_ID;
@@ -292,6 +338,8 @@ int32_t IposlClientStart(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addres
     if (terminal) {
         (void)memcpy(g_localLayer2, localLayer2, sizeof(g_localLayer2));
     }
+    g_identifierFound = false;
+    g_capabilityHandle = 0;
     g_terminal = terminal;
     g_methodHandle = 0;
     g_expectedOpcode = 0;
