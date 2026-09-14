@@ -49,6 +49,8 @@ int32_t IposlProfileProbePeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t a
 int32_t IposlProfileStartTerminal(const uint8_t gateway[IPOSL_LAYER2_ID_LEN], uint8_t addressType,
     const uint8_t localLayer2[IPOSL_LAYER2_ID_LEN]);
 void IposlProfileStopClient(void);
+/* Called from the TUN thread; copies data and serializes DTAP access on CP. */
+int32_t IposlProfileSendIpv4(uint16_t lcid, uint8_t tcid, const uint8_t *data, uint16_t length);
 uint16_t IposlProfileIdentityServiceMemberCount(void);
 uint8_t IposlProfileDataProtocolIndicator(void);
 

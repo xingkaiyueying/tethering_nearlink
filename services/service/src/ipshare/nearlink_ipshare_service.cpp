@@ -462,9 +462,11 @@ void NearlinkIpShareService::HandleConfigured(const uint8_t peer[6], bool opened
 void NearlinkIpShareService::HandleChannelState(bool established, int32_t error)
 {
     NearlinkIpShareState state;
+    NearlinkIpShareRole role;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         state = status_.state;
+        role = status_.role;
     }
     if (state == NearlinkIpShareState::STOPPING || state == NearlinkIpShareState::IDLE) {
         HILOGW("[IpShare][Service] channel callback ignored state=%{public}d", static_cast<int32_t>(state));
@@ -473,7 +475,12 @@ void NearlinkIpShareService::HandleChannelState(bool established, int32_t error)
     if (established) {
         HILOGI("[IpShare][Service] QoSM channel established");
         SetState(NearlinkIpShareState::CHANNEL_READY);
-    } else if (error != 0) {
+    } else if (error == 0 && role == NearlinkIpShareRole::GATEWAY) {
+        // Peer departure ends its channel, not the explicitly started gateway.
+        HILOGI("[IpShare][Service] peer released channel; gateway remains ready");
+        SetState(NearlinkIpShareState::IFACE_READY);
+    } else {
+        if (error == 0) error = IP_SHARE_RESOURCE_FAILED;
         HILOGE("[IpShare][Service] QoSM channel failed error=%{public}d", error);
         SetState(NearlinkIpShareState::ERROR, "channel", error);
     }

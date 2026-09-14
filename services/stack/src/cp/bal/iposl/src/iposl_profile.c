@@ -6,6 +6,10 @@
 #include "iposl_internal.h"
 
 #include <string.h>
+#include <stdatomic.h>
+#include "cp_worker.h"
+#include "sdf_mem.h"
+#include "sdf_buff.h"
 
 #include "dtap.h"
 #include "nlstk_log.h"
@@ -118,4 +122,65 @@ uint16_t IposlProfileIdentityServiceMemberCount(void)
 uint8_t IposlProfileDataProtocolIndicator(void)
 {
     return DTAP_PI_IPV4;
+}
+
+/* The caller and CP task each own one reference, including post failure/timeout. */
+typedef struct {
+    atomic_int refs;
+    int32_t result;
+    uint16_t lcid;
+    uint16_t length;
+    uint8_t tcid;
+    uint8_t payload[];
+} IposlSendTask;
+
+static void IposlSendRelease(void *arg)
+{
+    IposlSendTask *task = arg;
+    if (atomic_fetch_sub(&task->refs, 1) == 1) {
+        SDF_MemFree(task);
+    }
+}
+
+static void IposlSendOnCp(void *arg)
+{
+    IposlSendTask *task = arg;
+    SDF_Buff_S *buff = SDF_BuffNewWithReserve(task->length);
+    if (buff == NULL) {
+        return;
+    }
+    uint8_t *payload = SDF_BuffAppend(buff, task->length);
+    if (payload == NULL) {
+        SDF_BuffFree(buff);
+        return;
+    }
+    (void)memcpy(payload, task->payload, task->length);
+    DTAP_Data_S packet = {.pi = DTAP_PI_IPV4, .lcid = task->lcid, .tcid = task->tcid, .buff = buff};
+    task->result = (int32_t)DTAP_DataSend(&packet);
+    if (task->result != 0) {
+        SDF_BuffFree(buff);
+        NLSTK_LOG_ERROR("[IpShare][TX] CP DTAP send failed ret=%d", task->result);
+    }
+}
+
+int32_t IposlProfileSendIpv4(uint16_t lcid, uint8_t tcid, const uint8_t *data, uint16_t length)
+{
+    if (data == NULL || length == 0 || length > 1500) {
+        return IPOSL_ERR_INVALID_PARAM;
+    }
+    IposlSendTask *task = SDF_MemAlloc(sizeof(*task) + length);
+    if (task == NULL) {
+        return IPOSL_ERR_INVALID_STATE;
+    }
+    atomic_init(&task->refs, 2);
+    task->result = IPOSL_ERR_INVALID_STATE;
+    task->lcid = lcid;
+    task->tcid = tcid;
+    task->length = length;
+    (void)memcpy(task->payload, data, length);
+    /* Like Transport, wait at most 500 ms. The task owns its copy after timeout. */
+    uint32_t posted = CP_PostTaskBlocked(IposlSendOnCp, task, IposlSendRelease, 500);
+    int32_t result = posted == 0 ? task->result : IPOSL_ERR_INVALID_STATE;
+    IposlSendRelease(task);
+    return result;
 }
