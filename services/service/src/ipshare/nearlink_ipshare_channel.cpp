@@ -449,7 +449,11 @@ bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, u
         }
         offset += count;
     }
-    if (!ended || dhcp[3] != 0 || read32(dhcp + 24) != 0) return false; // No relay in this link.
+    uint32_t relay = read32(dhcp + 24);
+    // The platform DHCP server writes its gateway address into giaddr even on this
+    // directly connected L3 TUN. Keep client requests relay-free, and accept that
+    // server reply shape only when giaddr is the authenticated server identifier.
+    if (!ended || dhcp[3] != 0 || (request ? relay != 0 : relay != 0 && relay != server)) return false;
     uint32_t source = read32(data + 12), destination = read32(data + 16);
     if (request) {
         if (source != 0 && (source != read32(dhcp + 12) || !unicast(source))) return false;
