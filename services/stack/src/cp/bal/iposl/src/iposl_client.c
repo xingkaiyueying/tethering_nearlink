@@ -147,15 +147,36 @@ static void OnCallMethod(int32_t appId, NLSTK_SsapClientCallMethodResult_S *resp
     NotifyConfigured(true, IPOSL_SUCCESS);
 }
 
+static bool SupportsGatewayIpv4(const uint8_t *data, uint16_t length)
+{
+    if (data == NULL || length < 3 || (((uint16_t)data[1] << 8) | data[2]) != length - 3) return false;
+    /* The node identifier is opaque. Table 9 fields may be reordered and advertise extra supported bits. */
+    uint8_t seen = 0, nat = 0, communication = 0, ip = 0;
+    uint16_t mtu = 0;
+    for (uint16_t offset = 3; offset < length;) {
+        uint8_t type = data[offset++];
+        if (type < 1 || type > 4 || (seen & (1u << type)) != 0) return false;
+        uint16_t size = type == 2 ? 2 : 1;
+        if (length - offset < size) return false;
+        seen |= 1u << type;
+        if (type == 1) nat = data[offset];
+        if (type == 2) mtu = ((uint16_t)data[offset] << 8) | data[offset + 1];
+        if (type == 3) communication = data[offset];
+        if (type == 4) ip = data[offset];
+        offset += size;
+    }
+    return seen == 0x1e && (nat & 2) != 0 && mtu >= IPOSL_MTU &&
+        (communication & 1) != 0 && (ip & IPOSL_IP_TYPE_IPV4) != 0;
+}
+
 static void OnReadCapability(int32_t appId, NLSTK_SsapClientReadPropertyInfo_S *property,
     NLSTK_Errcode_E ret)
 {
     if (appId != g_clientAppId) return;
-    // This Demo supports the frozen IPv4 capability vector; fail closed on incompatible peers.
+    // Select the supported IPv4/unicast/NAPT baseline from structured capabilities.
     if (ret != NLSTK_ERRCODE_SUCCESS || property == NULL || property->handle != g_capabilityHandle ||
         property->errorCode != NLSTK_ERRCODE_SUCCESS || property->value.data == NULL ||
-        property->value.len != IPOSL_GATEWAY_CAPABILITY_LEN ||
-        memcmp(property->value.data, g_iposlGatewayCapability, IPOSL_GATEWAY_CAPABILITY_LEN) != 0 ||
+        !SupportsGatewayIpv4(property->value.data, property->value.len) ||
         SendRequest(IPOSL_OPCODE_CONFIGURE) != IPOSL_SUCCESS) {
         NotifyConfigured(false, IPOSL_ERR_NOT_SUPPORTED);
         Finish(false);

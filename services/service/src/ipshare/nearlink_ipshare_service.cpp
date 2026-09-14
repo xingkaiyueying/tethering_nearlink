@@ -204,7 +204,10 @@ int32_t NearlinkIpShareService::BeginRole(NearlinkIpShareRole role, const std::s
                 static_cast<int32_t>(status_.state));
             return IP_SHARE_INVALID_STATE;
         }
-        if (NearlinkIpShareChannel::GetInstance().SetPeer(peer, addressType) != 0) {
+        SLE_Addr_S local = SleProperties::GetInstance().GetLocalSleAddress();
+        bool gateway = role == NearlinkIpShareRole::GATEWAY;
+        if (NearlinkIpShareChannel::GetInstance().SetPeer(peer, addressType, gateway,
+            gateway ? peer : local.addr) != 0) {
             return IP_SHARE_INVALID_STATE; // Cancelled QoSM work is still draining; retry later.
         }
         status_ = {};

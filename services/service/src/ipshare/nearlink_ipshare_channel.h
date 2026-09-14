@@ -29,7 +29,7 @@ public:
     int32_t CreateTun();
     int32_t Open(const uint8_t peer[6], uint8_t addressType);
     void Close();
-    int32_t SetPeer(const uint8_t peer[6], uint8_t addressType);
+    int32_t SetPeer(const uint8_t peer[6], uint8_t addressType, bool gateway = true, const uint8_t *clientKey = nullptr);
     void SetDhcpBound(bool bound);
     bool IsCurrentGeneration(uint64_t generation);
 
@@ -45,7 +45,12 @@ private:
     int Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
     int32_t Send(const uint8_t *data, uint16_t length);
     static bool ValidateIpv4(const uint8_t *data, uint16_t length, bool dhcpBound);
-    void ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation);
+    bool ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation);
+    bool AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received);
+    bool gateway_ {true};
+    uint8_t clientKey_[6] {};
+    bool dhcpDiscover_ {false};
+    std::chrono::steady_clock::time_point transactionExpiry_ {};
     bool DhcpBoundLocked();
     uint8_t dhcpKey_[6] {};
     uint32_t dhcpXid_ {0};
