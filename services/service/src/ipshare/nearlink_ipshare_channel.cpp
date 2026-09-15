@@ -38,6 +38,73 @@ constexpr uint8_t DHCP_OPTION_END = 255;
 constexpr uint8_t DHCP_MESSAGE_ACK = 5;
 constexpr uint8_t DHCP_MAGIC_COOKIE[] = {99, 130, 83, 99};
 
+constexpr uint16_t IPV4_MIN_LENGTH = 20;
+constexpr uint8_t IPV4_IHL_MASK = 0x0f;
+constexpr uint8_t IPV4_WORD_LENGTH = 4;
+constexpr uint8_t IPV4_ADDRESS_LENGTH = 4;
+constexpr uint8_t IPV4_TOTAL_LENGTH_OFFSET = 2;
+constexpr uint8_t IPV4_FRAGMENT_OFFSET = 6;
+constexpr uint16_t IPV4_FRAGMENT_MASK = 0x3fff;
+constexpr uint8_t IPV4_PROTOCOL_OFFSET = 9;
+constexpr uint8_t IPV4_SOURCE_OFFSET = 12;
+constexpr uint8_t IPV4_DESTINATION_OFFSET = 16;
+constexpr uint32_t IPV4_BROADCAST = 0xffffffff;
+constexpr uint16_t CHECKSUM_VALID = 0xffff;
+constexpr uint8_t UDP_DESTINATION_OFFSET = 2;
+constexpr uint8_t UDP_LENGTH_OFFSET = 4;
+constexpr uint8_t UDP_CHECKSUM_OFFSET = 6;
+constexpr uint8_t DHCP_BOOT_REQUEST = 1;
+constexpr uint8_t DHCP_ETHERNET_TYPE = 1;
+constexpr uint8_t DHCP_LAYER2_LENGTH = 6;
+constexpr uint8_t DHCP_XID_OFFSET = 4;
+constexpr uint8_t DHCP_CLIENT_IP_OFFSET = 12;
+constexpr uint8_t DHCP_YOUR_IP_OFFSET = 16;
+constexpr uint8_t DHCP_RELAY_IP_OFFSET = 24;
+constexpr uint8_t DHCP_CLIENT_KEY_OFFSET = 28;
+constexpr uint8_t DHCP_OPTION_SUBNET = 1;
+constexpr uint8_t DHCP_OPTION_REQUESTED_IP = 50;
+constexpr uint8_t DHCP_OPTION_LEASE = 51;
+constexpr uint8_t DHCP_OPTION_SERVER_ID = 54;
+constexpr uint8_t DHCP_OPTION_CLIENT_ID = 61;
+constexpr uint8_t DHCP_MESSAGE_DISCOVER = 1;
+constexpr uint8_t DHCP_MESSAGE_OFFER = 2;
+constexpr uint8_t DHCP_MESSAGE_REQUEST = 3;
+constexpr uint8_t DHCP_MESSAGE_DECLINE = 4;
+constexpr uint8_t DHCP_MESSAGE_NAK = 6;
+constexpr uint8_t DHCP_MESSAGE_RELEASE = 7;
+constexpr auto DHCP_TRANSACTION_TIMEOUT = std::chrono::seconds(120);
+
+uint32_t ReadUint32(const uint8_t *data)
+{
+    return (uint32_t(data[0]) << 24) | (uint32_t(data[1]) << 16) | (uint32_t(data[2]) << 8) | data[3];
+}
+
+uint32_t SumWords(const uint8_t *data, uint16_t length, uint32_t sum)
+{
+    for (uint16_t i = 0; i < length; i += 2) {
+        sum += uint32_t(data[i]) << 8;
+        if (i + 1 < length) {
+            sum += data[i + 1];
+        }
+    }
+    while (sum >> 16) {
+        sum = (sum & CHECKSUM_VALID) + (sum >> 16);
+    }
+    return sum;
+}
+
+bool IsUnicastAddress(uint32_t address)
+{
+    return (address >> 24) != 0 && (address >> 24) != 127 && (address >> 24) < 224;
+}
+
+bool IsLeaseAddress(uint32_t address, uint32_t mask)
+{
+    uint32_t hosts = ~mask;
+    return IsUnicastAddress(address) && mask != 0 && hosts >= 3 && (hosts & (hosts + 1)) == 0 &&
+           (address & hosts) != 0 && (address & hosts) != hosts;
+}
+
 uint16_t ReadUint16(const uint8_t *data)
 {
     return static_cast<uint16_t>((static_cast<uint16_t>(data[0]) << 8) | data[1]);
@@ -202,13 +269,6 @@ void NearlinkIpShareChannel::Close()
     HILOGI("[IpShare][Channel] channel and TUN closed");
 }
 
-void NearlinkIpShareChannel::SetDhcpBound(bool bound)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    dhcpBound_ = bound;
-    HILOGI("[DHCP][IpShare][Channel] DHCP binding state=%{public}d", bound);
-}
-
 bool NearlinkIpShareChannel::IsIpSharePort(uint16_t port)
 {
     return port == IP_SHARE_PORT;
@@ -225,8 +285,9 @@ bool NearlinkIpShareChannel::CanAccept(uint16_t port)
     const uint8_t emptyPeer[6] = {0};
     bool accept = IsIpSharePort(port) && initialized_ && active_ && !releasing_ && !channelPending_ &&
                   !channelEstablished_ && tun_.IsOpen() && memcmp(peer_, emptyPeer, sizeof(peer_)) != 0;
-    if (accept)
-        channelPending_ = true; // Passive creation has the same late-completion race as Open.
+    if (accept) {
+        channelPending_ = true;
+    } // Passive creation has the same late-completion race as Open.
     return accept;
 }
 
@@ -302,8 +363,9 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
         int32_t ret = QOSM_TransChannelDestroy(&release);
         HILOGI("[IpShare][Channel] late/cancelled channel cleanup tcid=%{public}u ret=%{public}d", release.tcid, ret);
     }
-    if (callback)
+    if (callback) {
         callback(established, error, generation);
+    }
     return true;
 }
 
@@ -334,11 +396,6 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
         generation = generation_;
     }
     uint16_t length = static_cast<uint16_t>(dataLen);
-    if (!ValidateIpv4(data, length, true)) {
-        uint8_t version = data == nullptr || length == 0 ? 0 : data[0] >> 4;
-        HILOGD("[DHCP][IpShare][RX] non-IPv4 payload ignored length=%{public}u version=%{public}u", length, version);
-        return -1;
-    }
     if (!AuthorizePacket(data, length, generation, true)) {
         HILOGW("[DHCP][IpShare][RX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d", length,
                bound);
@@ -369,11 +426,6 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
         bound = DhcpBoundLocked();
         generation = generation_;
     }
-    if (!ValidateIpv4(data, length, true)) {
-        uint8_t version = data == nullptr || length == 0 ? 0 : data[0] >> 4;
-        HILOGD("[DHCP][IpShare][TX] non-IPv4 payload ignored length=%{public}u version=%{public}u", length, version);
-        return 0;
-    }
     if (!AuthorizePacket(data, length, generation, false)) {
         HILOGW("[DHCP][IpShare][TX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d", length,
                bound);
@@ -396,149 +448,127 @@ bool NearlinkIpShareChannel::DhcpBoundLocked()
     return dhcpBound_;
 }
 
-bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation)
+bool NearlinkIpShareChannel::ParseDhcpOptions(const uint8_t *data, uint16_t length, DhcpPacket &packet)
 {
-    if (!ValidateIpv4(data, length, false)) {
-        return false;
-    }
-    uint16_t header = (data[0] & 0x0f) * 4;
-    uint16_t udpLength = ReadUint16(data + header + 4);
-    if (udpLength < UDP_HEADER_LENGTH + DHCP_OPTIONS_OFFSET || header + udpLength != length) {
-        return false;
-    }
-    auto sumWords = [](const uint8_t *bytes, uint16_t size, uint32_t sum) {
-        for (uint16_t i = 0; i < size; i += 2) {
-            sum += uint32_t(bytes[i]) << 8;
-            if (i + 1 < size)
-                sum += bytes[i + 1];
-        }
-        while (sum >> 16)
-            sum = (sum & 0xffff) + (sum >> 16);
-        return sum;
-    };
-    if (sumWords(data, header, 0) != 0xffff) {
-        return false;
-    }
-    if (ReadUint16(data + header + 6) != 0 &&
-        sumWords(data + header, udpLength, sumWords(data + 12, 8, IPV4_PROTOCOL_UDP + udpLength)) != 0xffff) {
-        return false;
-    }
-    const uint8_t *dhcp = data + header + UDP_HEADER_LENGTH;
-    uint16_t end = udpLength - UDP_HEADER_LENGTH;
-    bool request = ReadUint16(data + header) == DHCP_CLIENT_PORT;
-    if (dhcp[0] != (request ? 1 : DHCP_BOOT_REPLY) || dhcp[1] != 1 || dhcp[2] != 6 ||
-        memcmp(dhcp + DHCP_MAGIC_COOKIE_OFFSET, DHCP_MAGIC_COOKIE, sizeof(DHCP_MAGIC_COOKIE)) != 0) {
-        return false;
-    }
-    auto read32 = [](const uint8_t *p) -> uint32_t {
-        return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
-    };
-    auto unicast = [](uint32_t ip) {
-        return ip != 0 && (ip >> 24) != 0 && (ip >> 24) != 127 && (ip >> 24) < 224 && (ip & 0xff) != 255;
-    };
-    uint8_t message = 0;
-    uint32_t requested = read32(dhcp + 12), server = 0, lease = 0;
-    bool haveRequested = false, haveServer = false, haveLease = false, haveClient = false;
-    bool ended = false;
-    for (uint16_t offset = DHCP_OPTIONS_OFFSET; offset < end;) {
-        uint8_t option = dhcp[offset++];
+    bool haveRequested = false;
+    bool haveServer = false;
+    bool haveLease = false;
+    bool haveClient = false;
+    for (uint16_t offset = DHCP_OPTIONS_OFFSET; offset < length;) {
+        uint8_t option = data[offset++];
         if (option == DHCP_OPTION_PAD) {
             continue;
         }
         if (option == DHCP_OPTION_END) {
-            ended = true;
-            break;
+            return packet.message != 0;
         }
-        if (offset == end) {
+        if (offset == length) {
             return false;
         }
-        uint8_t count = dhcp[offset++];
-        if (count > end - offset) {
+        uint8_t count = data[offset++];
+        if (count > length - offset) {
             return false;
         }
         if (option == DHCP_OPTION_MESSAGE_TYPE) {
-            if (message != 0 || count != 1) {
+            if (packet.message != 0 || count != 1) {
                 return false;
             }
-            message = dhcp[offset];
-        } else if (option == 50) {
-            if (haveRequested || count != 4) {
-                return false;
-            }
-            requested = read32(dhcp + offset);
-            haveRequested = true;
-        } else if (option == 54) {
-            if (haveServer || count != 4) {
-                return false;
-            }
-            server = read32(dhcp + offset);
-            haveServer = true;
-        } else if (option == 61) {
-            if (haveClient || count != 7 || dhcp[offset] != 1 || memcmp(dhcp + offset + 1, dhcp + 28, 6) != 0) {
+            packet.message = data[offset];
+        } else if (option == DHCP_OPTION_CLIENT_ID) {
+            if (haveClient || count != DHCP_LAYER2_LENGTH + 1 || data[offset] != DHCP_ETHERNET_TYPE ||
+                memcmp(data + offset + 1, packet.key, DHCP_LAYER2_LENGTH) != 0) {
                 return false;
             }
             haveClient = true;
-        } else if (option == 51) {
-            if (haveLease || count != 4) {
+        } else if (option == DHCP_OPTION_REQUESTED_IP || option == DHCP_OPTION_SERVER_ID ||
+                   option == DHCP_OPTION_LEASE || option == DHCP_OPTION_SUBNET) {
+            bool *present = &haveRequested;
+            uint32_t *value = &packet.requested;
+            if (option == DHCP_OPTION_SERVER_ID) {
+                present = &haveServer;
+                value = &packet.server;
+            } else if (option == DHCP_OPTION_LEASE) {
+                present = &haveLease;
+                value = &packet.lease;
+            } else if (option == DHCP_OPTION_SUBNET) {
+                present = &packet.haveSubnet;
+                value = &packet.subnet;
+            }
+            if (*present || count != IPV4_ADDRESS_LENGTH) {
                 return false;
             }
-            lease = read32(dhcp + offset);
-            haveLease = true;
+            *present = true;
+            *value = ReadUint32(data + offset);
         }
         offset += count;
     }
-    uint32_t relay = read32(dhcp + 24);
-    // The platform DHCP server writes its gateway address into giaddr even on this
-    // directly connected L3 TUN. Keep client requests relay-free, and accept that
-    // server reply shape only when giaddr is the authenticated server identifier.
-    if (!ended || dhcp[3] != 0 || (request ? relay != 0 : relay != 0 && relay != server)) {
+    return false;
+}
+
+bool NearlinkIpShareChannel::ParseDhcpPacket(const uint8_t *data, uint16_t length, DhcpPacket &packet)
+{
+    if (!ValidateIpv4(data, length) || !IsDhcpPacket(data, length)) {
         return false;
     }
-    uint32_t source = read32(data + 12), destination = read32(data + 16);
-    if (request) {
-        if (source != 0 && (source != read32(dhcp + 12) || !unicast(source))) {
-            return false;
-        }
-    } else {
-        if (source != server || !unicast(server) ||
-            (destination != 0xffffffffu && destination != read32(dhcp + 16) && destination != read32(dhcp + 12))) {
-            return false;
-        }
-    }
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!active_ || !channelEstablished_ || generation != generation_) {
+    uint16_t header = (data[0] & IPV4_IHL_MASK) * IPV4_WORD_LENGTH;
+    uint16_t udpLength = ReadUint16(data + header + UDP_LENGTH_OFFSET);
+    if (udpLength < UDP_HEADER_LENGTH + DHCP_OPTIONS_OFFSET || header + udpLength != length ||
+        SumWords(data, header, 0) != CHECKSUM_VALID) {
         return false;
     }
-    if (memcmp(clientKey_, dhcp + 28, sizeof(clientKey_)) != 0) {
+    uint32_t pseudoSum = SumWords(data + IPV4_SOURCE_OFFSET, 2 * IPV4_ADDRESS_LENGTH, IPV4_PROTOCOL_UDP + udpLength);
+    if (ReadUint16(data + header + UDP_CHECKSUM_OFFSET) != 0 &&
+        SumWords(data + header, udpLength, pseudoSum) != CHECKSUM_VALID) {
         return false;
     }
-    if (request && source != 0 && (!DhcpBoundLocked() || source != boundIp_)) {
+    const uint8_t *dhcp = data + header + UDP_HEADER_LENGTH;
+    packet.request = ReadUint16(data + header) == DHCP_CLIENT_PORT;
+    if (dhcp[0] != (packet.request ? DHCP_BOOT_REQUEST : DHCP_BOOT_REPLY) || dhcp[1] != DHCP_ETHERNET_TYPE ||
+        dhcp[2] != DHCP_LAYER2_LENGTH || dhcp[3] != 0 ||
+        memcmp(dhcp + DHCP_MAGIC_COOKIE_OFFSET, DHCP_MAGIC_COOKIE, sizeof(DHCP_MAGIC_COOKIE)) != 0) {
         return false;
     }
-    auto now = std::chrono::steady_clock::now();
-    uint32_t xid = read32(dhcp + 4);
-    if (request && message == 1) {
+    packet.source = ReadUint32(data + IPV4_SOURCE_OFFSET);
+    packet.client = ReadUint32(dhcp + DHCP_CLIENT_IP_OFFSET);
+    packet.offered = ReadUint32(dhcp + DHCP_YOUR_IP_OFFSET);
+    packet.requested = packet.client;
+    packet.xid = ReadUint32(dhcp + DHCP_XID_OFFSET);
+    memcpy(packet.key, dhcp + DHCP_CLIENT_KEY_OFFSET, sizeof(packet.key));
+    if (!ParseDhcpOptions(dhcp, udpLength - UDP_HEADER_LENGTH, packet)) {
+        return false;
+    }
+    // This platform server uses its own address in giaddr for a direct L3 reply.
+    uint32_t relay = ReadUint32(dhcp + DHCP_RELAY_IP_OFFSET);
+    if (packet.request) {
+        return relay == 0 &&
+               (packet.source == 0 || (packet.source == packet.client && IsUnicastAddress(packet.source)));
+    }
+    uint32_t destination = ReadUint32(data + IPV4_DESTINATION_OFFSET);
+    return (relay == 0 || relay == packet.server) && packet.source == packet.server &&
+           IsUnicastAddress(packet.server) &&
+           (destination == IPV4_BROADCAST || destination == packet.offered || destination == packet.client);
+}
+
+bool NearlinkIpShareChannel::HandleDhcpRequestLocked(const DhcpPacket &packet)
+{
+    if (packet.source != 0 && (!DhcpBoundLocked() || packet.source != boundIp_)) {
+        return false;
+    }
+    if (packet.message == DHCP_MESSAGE_DISCOVER) {
         dhcpBound_ = false;
         boundIp_ = 0;
         dhcpRequest_ = false;
         dhcpDiscover_ = true;
-        dhcpXid_ = xid;
-        memcpy(dhcpKey_, dhcp + 28, sizeof(dhcpKey_));
-        transactionExpiry_ = now + std::chrono::seconds(120);
-        return true;
-    }
-    if (request && message == 3 && unicast(requested)) {
-        // Permit INIT-REBOOT and renewal, but only for the explicitly authorized identity.
-        memcpy(dhcpKey_, dhcp + 28, sizeof(dhcpKey_));
-        dhcpXid_ = xid;
-        requestedIp_ = requested;
-        serverIp_ = server;
+    } else if (packet.message == DHCP_MESSAGE_REQUEST && IsUnicastAddress(packet.requested)) {
+        // A client need not know its subnet until the server's ACK. Never infer /24 from the address.
+        if (packet.haveSubnet && !IsLeaseAddress(packet.requested, packet.subnet)) {
+            return false;
+        }
+        requestedIp_ = packet.requested;
+        serverIp_ = packet.server;
         dhcpRequest_ = true;
-        transactionExpiry_ = now + std::chrono::seconds(120);
-        return true;
-    }
-    if (request && (message == 4 || message == 7)) {
-        if (!DhcpBoundLocked() || requested != boundIp_) {
+    } else if (packet.message == DHCP_MESSAGE_DECLINE || packet.message == DHCP_MESSAGE_RELEASE) {
+        if (!DhcpBoundLocked() || packet.requested != boundIp_) {
             return false;
         }
         dhcpBound_ = false;
@@ -546,29 +576,41 @@ bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, u
         dhcpRequest_ = false;
         dhcpDiscover_ = false;
         return true;
-    }
-    if (request || now >= transactionExpiry_ || xid != dhcpXid_ || memcmp(dhcpKey_, dhcp + 28, sizeof(dhcpKey_)) != 0 ||
-        !unicast(server)) {
+    } else {
         return false;
     }
-    if (message == 2) {
-        return dhcpDiscover_ && unicast(read32(dhcp + 16));
-    }
-    if (!dhcpRequest_ || (serverIp_ != 0 && serverIp_ != server)) {
+    dhcpXid_ = packet.xid;
+    memcpy(dhcpKey_, packet.key, sizeof(dhcpKey_));
+    transactionExpiry_ = std::chrono::steady_clock::now() + DHCP_TRANSACTION_TIMEOUT;
+    return true;
+}
+
+bool NearlinkIpShareChannel::HandleDhcpReplyLocked(const DhcpPacket &packet)
+{
+    auto now = std::chrono::steady_clock::now();
+    if (now >= transactionExpiry_ || packet.xid != dhcpXid_ || memcmp(dhcpKey_, packet.key, sizeof(dhcpKey_)) != 0) {
         return false;
     }
-    if (message == 6) {
+    if (packet.message == DHCP_MESSAGE_OFFER) {
+        return dhcpDiscover_ && IsUnicastAddress(packet.offered) &&
+               (!packet.haveSubnet || IsLeaseAddress(packet.offered, packet.subnet));
+    }
+    if (!dhcpRequest_ || (serverIp_ != 0 && serverIp_ != packet.server)) {
+        return false;
+    }
+    if (packet.message == DHCP_MESSAGE_NAK) {
         dhcpBound_ = false;
         boundIp_ = 0;
         dhcpRequest_ = false;
         dhcpDiscover_ = false;
         return true;
     }
-    if (message != DHCP_MESSAGE_ACK || read32(dhcp + 16) != requestedIp_ || lease == 0) {
+    if (packet.message != DHCP_MESSAGE_ACK || packet.offered != requestedIp_ || packet.lease == 0 ||
+        !packet.haveSubnet || !IsLeaseAddress(packet.offered, packet.subnet)) {
         return false;
     }
     boundIp_ = requestedIp_;
-    leaseExpiry_ = now + std::chrono::seconds(lease);
+    leaseExpiry_ = now + std::chrono::seconds(packet.lease);
     dhcpBound_ = true;
     dhcpRequest_ = false;
     dhcpDiscover_ = false;
@@ -576,9 +618,23 @@ bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, u
     return true;
 }
 
+bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation)
+{
+    DhcpPacket packet{};
+    if (!ParseDhcpPacket(data, length, packet)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || !channelEstablished_ || generation != generation_ ||
+        memcmp(clientKey_, packet.key, sizeof(clientKey_)) != 0) {
+        return false;
+    }
+    return packet.request ? HandleDhcpRequestLocked(packet) : HandleDhcpReplyLocked(packet);
+}
+
 bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received)
 {
-    if (!ValidateIpv4(data, length, true)) {
+    if (!ValidateIpv4(data, length)) {
         return false;
     }
     bool fromClient;
@@ -589,8 +645,8 @@ bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t lengt
         }
         fromClient = gateway_ == received;
     }
-    if (ValidateIpv4(data, length, false)) {
-        uint16_t header = (data[0] & 0x0f) * 4;
+    if (IsDhcpPacket(data, length)) {
+        uint16_t header = (data[0] & IPV4_IHL_MASK) * IPV4_WORD_LENGTH;
         if ((ReadUint16(data + header) == DHCP_CLIENT_PORT) != fromClient) {
             return false;
         }
@@ -600,38 +656,32 @@ bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t lengt
     if (!active_ || !channelEstablished_ || generation != generation_ || !DhcpBoundLocked()) {
         return false;
     }
-    // Gateway ingress must use the lease source; gateway egress must target it.
-    // Public Internet reply sources remain valid. The terminal applies the mirror rule.
-    const uint8_t *ip = data + (fromClient ? 12 : 16);
-    uint32_t address = (uint32_t(ip[0]) << 24) | (uint32_t(ip[1]) << 16) | (uint32_t(ip[2]) << 8) | ip[3];
-    return address == boundIp_;
+    // The negotiated Demo mode is unicast. Public Internet reply sources remain valid.
+    return ReadUint32(data + (fromClient ? IPV4_SOURCE_OFFSET : IPV4_DESTINATION_OFFSET)) == boundIp_;
 }
 
-bool NearlinkIpShareChannel::ValidateIpv4(const uint8_t *data, uint16_t length, bool dhcpBound)
+bool NearlinkIpShareChannel::ValidateIpv4(const uint8_t *data, uint16_t length)
 {
-    if (data == nullptr || length < 20 || (data[0] >> 4) != IPV4_VERSION || (data[0] & 0x0F) < IPV4_MIN_IHL) {
+    if (data == nullptr || length < IPV4_MIN_LENGTH || (data[0] >> 4) != IPV4_VERSION ||
+        (data[0] & IPV4_IHL_MASK) < IPV4_MIN_IHL) {
         return false;
     }
-    uint16_t headerLen = static_cast<uint16_t>((data[0] & 0x0F) * 4);
-    uint16_t totalLen = static_cast<uint16_t>((static_cast<uint16_t>(data[2]) << 8) | data[3]);
-    if (headerLen > length || totalLen != length || totalLen > IPOSL_MTU) {
+    uint16_t header = (data[0] & IPV4_IHL_MASK) * IPV4_WORD_LENGTH;
+    return header <= length && ReadUint16(data + IPV4_TOTAL_LENGTH_OFFSET) == length && length <= IPOSL_MTU;
+}
+
+bool NearlinkIpShareChannel::IsDhcpPacket(const uint8_t *data, uint16_t length)
+{
+    // Called only after the basic IPv4 bounds have been checked.
+    uint16_t header = (data[0] & IPV4_IHL_MASK) * IPV4_WORD_LENGTH;
+    if ((ReadUint16(data + IPV4_FRAGMENT_OFFSET) & IPV4_FRAGMENT_MASK) != 0 ||
+        data[IPV4_PROTOCOL_OFFSET] != IPV4_PROTOCOL_UDP || length < header + UDP_HEADER_LENGTH) {
         return false;
     }
-    if (dhcpBound) {
-        return true;
-    }
-    uint16_t fragment = static_cast<uint16_t>((static_cast<uint16_t>(data[6]) << 8) | data[7]);
-    if ((fragment & 0x3FFFu) != 0) {
-        return false;
-    }
-    if (data[9] != IPV4_PROTOCOL_UDP || length < headerLen + 8) {
-        return false;
-    }
-    uint16_t sourcePort = static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen]) << 8) | data[headerLen + 1]);
-    uint16_t destinationPort =
-        static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen + 2]) << 8) | data[headerLen + 3]);
-    return (sourcePort == DHCP_SERVER_PORT && destinationPort == DHCP_CLIENT_PORT) ||
-           (sourcePort == DHCP_CLIENT_PORT && destinationPort == DHCP_SERVER_PORT);
+    uint16_t source = ReadUint16(data + header);
+    uint16_t destination = ReadUint16(data + header + UDP_DESTINATION_OFFSET);
+    return (source == DHCP_SERVER_PORT && destination == DHCP_CLIENT_PORT) ||
+           (source == DHCP_CLIENT_PORT && destination == DHCP_SERVER_PORT);
 }
 
 } // namespace OHOS::Nearlink

@@ -178,13 +178,11 @@ void NearlinkIpShareTun::ReadLoop()
             continue;
         }
         ssize_t length = read(fd, packet, sizeof(packet));
-        if (length > 0 && length <= static_cast<ssize_t>(UINT16_MAX) && callback) {
+        if (length > 0 && callback) {
 
             callback(packet, static_cast<uint16_t>(length));
         } else if (length < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             HILOGE("[DHCP][IpShare][Tun] read failed errno=%{public}d", errno);
-        } else if (length > static_cast<ssize_t>(UINT16_MAX)) {
-            HILOGE("[DHCP][IpShare][Tun] read rejected: packet too large length=%{public}zd", length);
         } else if (length > 0 && !callback) {
             HILOGE("[DHCP][IpShare][Tun] read dropped: packet callback is null");
         }

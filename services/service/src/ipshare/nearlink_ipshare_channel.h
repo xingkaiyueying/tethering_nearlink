@@ -40,7 +40,6 @@ public:
     void Close();
     int32_t SetPeer(const uint8_t peer[6], uint8_t addressType, bool gateway = true,
                     const uint8_t *clientKey = nullptr);
-    void SetDhcpBound(bool bound);
     bool IsCurrentGeneration(uint64_t generation);
 
     static bool IsIpSharePort(uint16_t port);
@@ -54,7 +53,26 @@ private:
     bool CanAccept(uint16_t port);
     int Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
     int32_t Send(const uint8_t *data, uint16_t length);
-    static bool ValidateIpv4(const uint8_t *data, uint16_t length, bool dhcpBound);
+    struct DhcpPacket {
+        bool request{false};
+        bool haveSubnet{false};
+        uint8_t message{0};
+        uint8_t key[6]{};
+        uint32_t source{0};
+        uint32_t client{0};
+        uint32_t offered{0};
+        uint32_t requested{0};
+        uint32_t server{0};
+        uint32_t lease{0};
+        uint32_t subnet{0};
+        uint32_t xid{0};
+    };
+    static bool ValidateIpv4(const uint8_t *data, uint16_t length);
+    static bool IsDhcpPacket(const uint8_t *data, uint16_t length);
+    static bool ParseDhcpOptions(const uint8_t *data, uint16_t length, DhcpPacket &packet);
+    static bool ParseDhcpPacket(const uint8_t *data, uint16_t length, DhcpPacket &packet);
+    bool HandleDhcpRequestLocked(const DhcpPacket &packet);
+    bool HandleDhcpReplyLocked(const DhcpPacket &packet);
     bool ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation);
     bool AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received);
     bool gateway_{true};
