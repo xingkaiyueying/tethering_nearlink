@@ -2,6 +2,15 @@
  * Copyright (C) 2026 Huawei Device Co., Ltd.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #ifndef NEARLINK_IPSHARE_CHANNEL_H
 #define NEARLINK_IPSHARE_CHANNEL_H
@@ -29,7 +38,8 @@ public:
     int32_t CreateTun();
     int32_t Open(const uint8_t peer[6], uint8_t addressType);
     void Close();
-    int32_t SetPeer(const uint8_t peer[6], uint8_t addressType, bool gateway = true, const uint8_t *clientKey = nullptr);
+    int32_t SetPeer(const uint8_t peer[6], uint8_t addressType, bool gateway = true,
+                    const uint8_t *clientKey = nullptr);
     void SetDhcpBound(bool bound);
     bool IsCurrentGeneration(uint64_t generation);
 
@@ -47,34 +57,34 @@ private:
     static bool ValidateIpv4(const uint8_t *data, uint16_t length, bool dhcpBound);
     bool ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation);
     bool AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received);
-    bool gateway_ {true};
-    uint8_t clientKey_[6] {};
-    bool dhcpDiscover_ {false};
-    std::chrono::steady_clock::time_point transactionExpiry_ {};
+    bool gateway_{true};
+    uint8_t clientKey_[6]{};
+    bool dhcpDiscover_{false};
+    std::chrono::steady_clock::time_point transactionExpiry_{};
     bool DhcpBoundLocked();
-    uint8_t dhcpKey_[6] {};
-    uint32_t dhcpXid_ {0};
-    uint32_t requestedIp_ {0};
-    uint32_t serverIp_ {0};
-    uint32_t boundIp_ {0};
-    bool dhcpRequest_ {false};
-    std::chrono::steady_clock::time_point leaseExpiry_ {};
+    uint8_t dhcpKey_[6]{};
+    uint32_t dhcpXid_{0};
+    uint32_t requestedIp_{0};
+    uint32_t serverIp_{0};
+    uint32_t boundIp_{0};
+    bool dhcpRequest_{false};
+    std::chrono::steady_clock::time_point leaseExpiry_{};
 
     std::mutex mutex_;
     NearlinkIpShareTun tun_;
     StateCallback callback_;
-    uint8_t peer_[6] {};
-    uint8_t addressType_ {0};
-    uint16_t lcid_ {0};
-    uint8_t tcid_ {0};
-    uint64_t generation_ {0};
-    bool active_ {false};
-    bool releasing_ {false};
-    bool initialized_ {false};
-    bool channelPending_ {false};
-    bool channelEstablished_ {false};
-    bool dhcpBound_ {false};
+    uint8_t peer_[6]{};
+    uint8_t addressType_{0};
+    uint16_t lcid_{0};
+    uint8_t tcid_{0};
+    uint64_t generation_{0};
+    bool active_{false};
+    bool releasing_{false};
+    bool initialized_{false};
+    bool channelPending_{false};
+    bool channelEstablished_{false};
+    bool dhcpBound_{false};
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // NEARLINK_IPSHARE_CHANNEL_H
+} // namespace OHOS::Nearlink
+#endif // NEARLINK_IPSHARE_CHANNEL_H

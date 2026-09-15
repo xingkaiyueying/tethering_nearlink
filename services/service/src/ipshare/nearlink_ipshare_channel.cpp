@@ -2,6 +2,15 @@
  * Copyright (C) 2026 Huawei Device Co., Ltd.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "nearlink_ipshare_channel.h"
 
@@ -34,8 +43,7 @@ uint16_t ReadUint16(const uint8_t *data)
     return static_cast<uint16_t>((static_cast<uint16_t>(data[0]) << 8) | data[1]);
 }
 
-
-}
+} // namespace
 
 NearlinkIpShareChannel &NearlinkIpShareChannel::GetInstance()
 {
@@ -91,8 +99,8 @@ int32_t NearlinkIpShareChannel::CreateTun()
     return 0;
 }
 
-int32_t NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressType,
-    bool gateway, const uint8_t *clientKey)
+int32_t NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressType, bool gateway,
+                                        const uint8_t *clientKey)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     // QoSM has no creation request ID. Do not reuse the binding until old work is drained.
@@ -130,7 +138,7 @@ int32_t NearlinkIpShareChannel::Open(const uint8_t peer[6], uint8_t addressType)
         if (!initialized_ || !active_ || releasing_ || channelPending_ || channelEstablished_ ||
             memcmp(peer_, peer, sizeof(peer_)) != 0 || addressType_ != addressType) {
             HILOGE("[IpShare][Channel] open rejected initialized=%{public}d pending=%{public}d established=%{public}d",
-                initialized_, channelPending_, channelEstablished_);
+                   initialized_, channelPending_, channelEstablished_);
             return -1;
         }
         (void)memcpy(peer_, peer, sizeof(peer_));
@@ -147,7 +155,7 @@ int32_t NearlinkIpShareChannel::Open(const uint8_t peer[6], uint8_t addressType)
         channelPending_ = true;
     }
     HILOGI("[IpShare][Channel] QoSM create submitted port=%{public}u addressType=%{public}u", IP_SHARE_PORT,
-        addressType);
+           addressType);
     int32_t ret = QOSM_TransChannelCreate(&params);
     if (ret != 0) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -215,10 +223,10 @@ bool NearlinkIpShareChannel::CanAccept(uint16_t port)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     const uint8_t emptyPeer[6] = {0};
-    bool accept = IsIpSharePort(port) && initialized_ && active_ && !releasing_ &&
-        !channelPending_ && !channelEstablished_ && tun_.IsOpen() &&
-        memcmp(peer_, emptyPeer, sizeof(peer_)) != 0;
-    if (accept) channelPending_ = true; // Passive creation has the same late-completion race as Open.
+    bool accept = IsIpSharePort(port) && initialized_ && active_ && !releasing_ && !channelPending_ &&
+                  !channelEstablished_ && tun_.IsOpen() && memcmp(peer_, emptyPeer, sizeof(peer_)) != 0;
+    if (accept)
+        channelPending_ = true; // Passive creation has the same late-completion race as Open.
     return accept;
 }
 
@@ -265,14 +273,15 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
                 }
             }
         } else if (params->status == QOSM_TRANS_CHANNEL_ESTABLISH_FAIL) {
-            if (!channelPending_) return true;
+            if (!channelPending_) {
+                return true;
+            }
             channelPending_ = false;
             if (active_) {
                 callback = callback_;
                 error = -1;
             }
-        } else if (params->status == QOSM_TRANS_CHANNEL_RELEASED ||
-            params->status == QOSM_TRANS_CHANNEL_RELEASE_FAIL) {
+        } else if (params->status == QOSM_TRANS_CHANNEL_RELEASED || params->status == QOSM_TRANS_CHANNEL_RELEASE_FAIL) {
             if ((!channelEstablished_ && !releasing_) || params->lcid != lcid_ || params->tcid != tcid_) {
                 return true;
             }
@@ -291,10 +300,10 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
     }
     if (destroy) {
         int32_t ret = QOSM_TransChannelDestroy(&release);
-        HILOGI("[IpShare][Channel] late/cancelled channel cleanup tcid=%{public}u ret=%{public}d",
-            release.tcid, ret);
+        HILOGI("[IpShare][Channel] late/cancelled channel cleanup tcid=%{public}u ret=%{public}d", release.tcid, ret);
     }
-    if (callback) callback(established, error, generation);
+    if (callback)
+        callback(established, error, generation);
     return true;
 }
 
@@ -317,7 +326,8 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
         std::lock_guard<std::mutex> lock(mutex_);
         if (!active_ || !channelEstablished_ || info->lcid != lcid_ || info->tcid != tcid_ || dataLen > UINT16_MAX) {
             HILOGW("[DHCP][IpShare][RX] packet rejected: channel mismatch lcid=%{public}u tcid=%{public}u "
-                "length=%{public}u", info->lcid, info->tcid, dataLen);
+                   "length=%{public}u",
+                   info->lcid, info->tcid, dataLen);
             return -1;
         }
         bound = DhcpBoundLocked();
@@ -326,13 +336,12 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
     uint16_t length = static_cast<uint16_t>(dataLen);
     if (!ValidateIpv4(data, length, true)) {
         uint8_t version = data == nullptr || length == 0 ? 0 : data[0] >> 4;
-        HILOGD("[DHCP][IpShare][RX] non-IPv4 payload ignored length=%{public}u version=%{public}u",
-            length, version);
+        HILOGD("[DHCP][IpShare][RX] non-IPv4 payload ignored length=%{public}u version=%{public}u", length, version);
         return -1;
     }
     if (!AuthorizePacket(data, length, generation, true)) {
-        HILOGW("[DHCP][IpShare][RX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d",
-            length, bound);
+        HILOGW("[DHCP][IpShare][RX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d", length,
+               bound);
         return -1;
     }
     int32_t ret = tun_.Write(data, length);
@@ -362,19 +371,17 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
     }
     if (!ValidateIpv4(data, length, true)) {
         uint8_t version = data == nullptr || length == 0 ? 0 : data[0] >> 4;
-        HILOGD("[DHCP][IpShare][TX] non-IPv4 payload ignored length=%{public}u version=%{public}u",
-            length, version);
+        HILOGD("[DHCP][IpShare][TX] non-IPv4 payload ignored length=%{public}u version=%{public}u", length, version);
         return 0;
     }
     if (!AuthorizePacket(data, length, generation, false)) {
-        HILOGW("[DHCP][IpShare][TX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d",
-            length, bound);
+        HILOGW("[DHCP][IpShare][TX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d", length,
+               bound);
         return -1;
     }
     int32_t ret = IposlProfileSendIpv4(lcid, tcid, data, length);
     if (ret != 0) {
-        HILOGE("[DHCP][IpShare][TX] DTAP send failed lcid=%{public}u tcid=%{public}u ret=%{public}d",
-            lcid, tcid, ret);
+        HILOGE("[DHCP][IpShare][TX] DTAP send failed lcid=%{public}u tcid=%{public}u ret=%{public}d", lcid, tcid, ret);
         return -1;
     }
     return 0;
@@ -391,59 +398,90 @@ bool NearlinkIpShareChannel::DhcpBoundLocked()
 
 bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation)
 {
-    if (!ValidateIpv4(data, length, false)) return false;
+    if (!ValidateIpv4(data, length, false)) {
+        return false;
+    }
     uint16_t header = (data[0] & 0x0f) * 4;
     uint16_t udpLength = ReadUint16(data + header + 4);
-    if (udpLength < UDP_HEADER_LENGTH + DHCP_OPTIONS_OFFSET || header + udpLength != length) return false;
+    if (udpLength < UDP_HEADER_LENGTH + DHCP_OPTIONS_OFFSET || header + udpLength != length) {
+        return false;
+    }
     auto sumWords = [](const uint8_t *bytes, uint16_t size, uint32_t sum) {
         for (uint16_t i = 0; i < size; i += 2) {
             sum += uint32_t(bytes[i]) << 8;
-            if (i + 1 < size) sum += bytes[i + 1];
+            if (i + 1 < size)
+                sum += bytes[i + 1];
         }
-        while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+        while (sum >> 16)
+            sum = (sum & 0xffff) + (sum >> 16);
         return sum;
     };
-    if (sumWords(data, header, 0) != 0xffff) return false;
+    if (sumWords(data, header, 0) != 0xffff) {
+        return false;
+    }
     if (ReadUint16(data + header + 6) != 0 &&
-        sumWords(data + header, udpLength, sumWords(data + 12, 8, IPV4_PROTOCOL_UDP + udpLength)) != 0xffff) return false;
+        sumWords(data + header, udpLength, sumWords(data + 12, 8, IPV4_PROTOCOL_UDP + udpLength)) != 0xffff) {
+        return false;
+    }
     const uint8_t *dhcp = data + header + UDP_HEADER_LENGTH;
     uint16_t end = udpLength - UDP_HEADER_LENGTH;
     bool request = ReadUint16(data + header) == DHCP_CLIENT_PORT;
     if (dhcp[0] != (request ? 1 : DHCP_BOOT_REPLY) || dhcp[1] != 1 || dhcp[2] != 6 ||
-        memcmp(dhcp + DHCP_MAGIC_COOKIE_OFFSET, DHCP_MAGIC_COOKIE, sizeof(DHCP_MAGIC_COOKIE)) != 0) return false;
+        memcmp(dhcp + DHCP_MAGIC_COOKIE_OFFSET, DHCP_MAGIC_COOKIE, sizeof(DHCP_MAGIC_COOKIE)) != 0) {
+        return false;
+    }
     auto read32 = [](const uint8_t *p) -> uint32_t {
         return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
     };
-    auto unicast = [](uint32_t ip) { return ip != 0 && (ip >> 24) != 0 && (ip >> 24) != 127 &&
-        (ip >> 24) < 224 && (ip & 0xff) != 255; };
+    auto unicast = [](uint32_t ip) {
+        return ip != 0 && (ip >> 24) != 0 && (ip >> 24) != 127 && (ip >> 24) < 224 && (ip & 0xff) != 255;
+    };
     uint8_t message = 0;
     uint32_t requested = read32(dhcp + 12), server = 0, lease = 0;
     bool haveRequested = false, haveServer = false, haveLease = false, haveClient = false;
     bool ended = false;
     for (uint16_t offset = DHCP_OPTIONS_OFFSET; offset < end;) {
         uint8_t option = dhcp[offset++];
-        if (option == DHCP_OPTION_PAD) continue;
-        if (option == DHCP_OPTION_END) { ended = true; break; }
-        if (offset == end) return false;
+        if (option == DHCP_OPTION_PAD) {
+            continue;
+        }
+        if (option == DHCP_OPTION_END) {
+            ended = true;
+            break;
+        }
+        if (offset == end) {
+            return false;
+        }
         uint8_t count = dhcp[offset++];
-        if (count > end - offset) return false;
+        if (count > end - offset) {
+            return false;
+        }
         if (option == DHCP_OPTION_MESSAGE_TYPE) {
-            if (message != 0 || count != 1) return false;
+            if (message != 0 || count != 1) {
+                return false;
+            }
             message = dhcp[offset];
         } else if (option == 50) {
-            if (haveRequested || count != 4) return false;
+            if (haveRequested || count != 4) {
+                return false;
+            }
             requested = read32(dhcp + offset);
             haveRequested = true;
         } else if (option == 54) {
-            if (haveServer || count != 4) return false;
+            if (haveServer || count != 4) {
+                return false;
+            }
             server = read32(dhcp + offset);
             haveServer = true;
         } else if (option == 61) {
-            if (haveClient || count != 7 || dhcp[offset] != 1 ||
-                memcmp(dhcp + offset + 1, dhcp + 28, 6) != 0) return false;
+            if (haveClient || count != 7 || dhcp[offset] != 1 || memcmp(dhcp + offset + 1, dhcp + 28, 6) != 0) {
+                return false;
+            }
             haveClient = true;
         } else if (option == 51) {
-            if (haveLease || count != 4) return false;
+            if (haveLease || count != 4) {
+                return false;
+            }
             lease = read32(dhcp + offset);
             haveLease = true;
         }
@@ -453,19 +491,30 @@ bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, u
     // The platform DHCP server writes its gateway address into giaddr even on this
     // directly connected L3 TUN. Keep client requests relay-free, and accept that
     // server reply shape only when giaddr is the authenticated server identifier.
-    if (!ended || dhcp[3] != 0 || (request ? relay != 0 : relay != 0 && relay != server)) return false;
+    if (!ended || dhcp[3] != 0 || (request ? relay != 0 : relay != 0 && relay != server)) {
+        return false;
+    }
     uint32_t source = read32(data + 12), destination = read32(data + 16);
     if (request) {
-        if (source != 0 && (source != read32(dhcp + 12) || !unicast(source))) return false;
+        if (source != 0 && (source != read32(dhcp + 12) || !unicast(source))) {
+            return false;
+        }
     } else {
         if (source != server || !unicast(server) ||
-            (destination != 0xffffffffu && destination != read32(dhcp + 16) &&
-                destination != read32(dhcp + 12))) return false;
+            (destination != 0xffffffffu && destination != read32(dhcp + 16) && destination != read32(dhcp + 12))) {
+            return false;
+        }
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!active_ || !channelEstablished_ || generation != generation_) return false;
-    if (memcmp(clientKey_, dhcp + 28, sizeof(clientKey_)) != 0) return false;
-    if (request && source != 0 && (!DhcpBoundLocked() || source != boundIp_)) return false;
+    if (!active_ || !channelEstablished_ || generation != generation_) {
+        return false;
+    }
+    if (memcmp(clientKey_, dhcp + 28, sizeof(clientKey_)) != 0) {
+        return false;
+    }
+    if (request && source != 0 && (!DhcpBoundLocked() || source != boundIp_)) {
+        return false;
+    }
     auto now = std::chrono::steady_clock::now();
     uint32_t xid = read32(dhcp + 4);
     if (request && message == 1) {
@@ -489,17 +538,25 @@ bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, u
         return true;
     }
     if (request && (message == 4 || message == 7)) {
-        if (!DhcpBoundLocked() || requested != boundIp_) return false;
+        if (!DhcpBoundLocked() || requested != boundIp_) {
+            return false;
+        }
         dhcpBound_ = false;
         boundIp_ = 0;
         dhcpRequest_ = false;
         dhcpDiscover_ = false;
         return true;
     }
-    if (request || now >= transactionExpiry_ || xid != dhcpXid_ ||
-        memcmp(dhcpKey_, dhcp + 28, sizeof(dhcpKey_)) != 0 || !unicast(server)) return false;
-    if (message == 2) return dhcpDiscover_ && unicast(read32(dhcp + 16));
-    if (!dhcpRequest_ || (serverIp_ != 0 && serverIp_ != server)) return false;
+    if (request || now >= transactionExpiry_ || xid != dhcpXid_ || memcmp(dhcpKey_, dhcp + 28, sizeof(dhcpKey_)) != 0 ||
+        !unicast(server)) {
+        return false;
+    }
+    if (message == 2) {
+        return dhcpDiscover_ && unicast(read32(dhcp + 16));
+    }
+    if (!dhcpRequest_ || (serverIp_ != 0 && serverIp_ != server)) {
+        return false;
+    }
     if (message == 6) {
         dhcpBound_ = false;
         boundIp_ = 0;
@@ -507,7 +564,9 @@ bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, u
         dhcpDiscover_ = false;
         return true;
     }
-    if (message != DHCP_MESSAGE_ACK || read32(dhcp + 16) != requestedIp_ || lease == 0) return false;
+    if (message != DHCP_MESSAGE_ACK || read32(dhcp + 16) != requestedIp_ || lease == 0) {
+        return false;
+    }
     boundIp_ = requestedIp_;
     leaseExpiry_ = now + std::chrono::seconds(lease);
     dhcpBound_ = true;
@@ -517,28 +576,34 @@ bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, u
     return true;
 }
 
-bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t length,
-    uint64_t generation, bool received)
+bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received)
 {
-    if (!ValidateIpv4(data, length, true)) return false;
+    if (!ValidateIpv4(data, length, true)) {
+        return false;
+    }
     bool fromClient;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!active_ || !channelEstablished_ || generation != generation_) return false;
+        if (!active_ || !channelEstablished_ || generation != generation_) {
+            return false;
+        }
         fromClient = gateway_ == received;
     }
     if (ValidateIpv4(data, length, false)) {
         uint16_t header = (data[0] & 0x0f) * 4;
-        if ((ReadUint16(data + header) == DHCP_CLIENT_PORT) != fromClient) return false;
+        if ((ReadUint16(data + header) == DHCP_CLIENT_PORT) != fromClient) {
+            return false;
+        }
         return ObserveDhcp(data, length, generation);
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!active_ || !channelEstablished_ || generation != generation_ || !DhcpBoundLocked()) return false;
+    if (!active_ || !channelEstablished_ || generation != generation_ || !DhcpBoundLocked()) {
+        return false;
+    }
     // Gateway ingress must use the lease source; gateway egress must target it.
     // Public Internet reply sources remain valid. The terminal applies the mirror rule.
     const uint8_t *ip = data + (fromClient ? 12 : 16);
-    uint32_t address = (uint32_t(ip[0]) << 24) | (uint32_t(ip[1]) << 16) |
-        (uint32_t(ip[2]) << 8) | ip[3];
+    uint32_t address = (uint32_t(ip[0]) << 24) | (uint32_t(ip[1]) << 16) | (uint32_t(ip[2]) << 8) | ip[3];
     return address == boundIp_;
 }
 
@@ -562,12 +627,11 @@ bool NearlinkIpShareChannel::ValidateIpv4(const uint8_t *data, uint16_t length, 
     if (data[9] != IPV4_PROTOCOL_UDP || length < headerLen + 8) {
         return false;
     }
-    uint16_t sourcePort = static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen]) << 8) |
-        data[headerLen + 1]);
-    uint16_t destinationPort = static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen + 2]) << 8) |
-        data[headerLen + 3]);
+    uint16_t sourcePort = static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen]) << 8) | data[headerLen + 1]);
+    uint16_t destinationPort =
+        static_cast<uint16_t>((static_cast<uint16_t>(data[headerLen + 2]) << 8) | data[headerLen + 3]);
     return (sourcePort == DHCP_SERVER_PORT && destinationPort == DHCP_CLIENT_PORT) ||
-        (sourcePort == DHCP_CLIENT_PORT && destinationPort == DHCP_SERVER_PORT);
+           (sourcePort == DHCP_CLIENT_PORT && destinationPort == DHCP_SERVER_PORT);
 }
 
-}  // namespace OHOS::Nearlink
+} // namespace OHOS::Nearlink
