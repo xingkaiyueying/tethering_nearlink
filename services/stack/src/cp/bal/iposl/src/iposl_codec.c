@@ -2,6 +2,15 @@
  * Copyright (C) 2026 Huawei Device Co., Ltd.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "iposl_codec.h"
 
@@ -60,6 +69,13 @@ int32_t IposlCodecDecodeRequest(const uint8_t *data, size_t len, uint8_t *opcode
 {
     if (data == NULL || opcode == NULL || layer2 == NULL || len < 1) {
         return IPOSL_ERR_INVALID_PARAM;
+    }
+    // Preserve a structurally complete request identity for a method-level rejection.
+    // Semantic errors must not silently become an unencodable opcode 0 response.
+    if ((data[0] == IPOSL_OPCODE_CONFIGURE || data[0] == IPOSL_OPCODE_ENABLE) &&
+        len >= 1 + IPOSL_LAYER2_ID_LEN) {
+        *opcode = data[0];
+        (void)memcpy(layer2, data + 1, IPOSL_LAYER2_ID_LEN);
     }
     if (data[0] == IPOSL_OPCODE_CONFIGURE) {
         if (len != IPOSL_CONFIG_REQUEST_LEN || data[7] != 0x05 || data[8] != 0xDC ||

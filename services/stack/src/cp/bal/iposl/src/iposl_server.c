@@ -2,6 +2,15 @@
  * Copyright (C) 2026 Huawei Device Co., Ltd.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "iposl_internal.h"
 
@@ -57,10 +66,19 @@ static void FillProperty(NLSTK_SsapServicePropertyParam_S *property, const uint8
     /* Demo UUIDs are private 128-bit UUIDs, so their SSAP item types must stay vendor-specific. */
     property->type = ITEM_TYPE_VENDOR_PROPERTY;
     SetUuid(&property->uuid, uuid);
-    property->permission.permissionValue = SSAP_PERMISSION_AUTHENTICATION_NEED | SSAP_PERMISSION_ENCRYPTION_NEED;
+    property->permission.permissionValue = SSAP_PERMISSION_AUTHENTICATION_NEED | SSAP_PERMISSION_ENCRYPTION_NEED |
+        SSAP_PERMISSION_AUTHORIZATION_NEED;
     property->operation.operationValue = operation;
     property->val.data = (uint8_t *)value;
     property->val.len = valueLen;
+}
+
+static void OnReadPropertyAuthorize(int32_t appId, uint16_t requestId,
+    NLSTK_SsapServerReadPropertyInfo_S *property)
+{
+    bool allow = appId == g_serverAppId && g_serverActive && property != NULL &&
+        IsExpectedPeer(&property->addr);
+    (void)NLSTK_SsapServerAuthorizeResult(appId, requestId, allow);
 }
 
 static int32_t AddIdentifierService(void)
@@ -200,6 +218,7 @@ int32_t IposlServerInitialize(void)
     }
     NLSTK_SsapAppServerCb_S callbacks = {0};
     callbacks.onCallMethod = OnCallMethod;
+    callbacks.onReadPropertyAuthorizeRequest = OnReadPropertyAuthorize;
     NLSTK_Errcode_E registerRet = NLSTK_SsapServerRegApp(&callbacks, &g_serverAppId);
     if (registerRet != NLSTK_ERRCODE_SUCCESS || g_serverAppId == SSAP_APP_INVALID_ID) {
         g_serverAppId = SSAP_APP_INVALID_ID;

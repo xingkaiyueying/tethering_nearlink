@@ -2,6 +2,15 @@
  * Copyright (C) 2026 Huawei Device Co., Ltd.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "nearlink_ipshare_service.h"
 
@@ -27,7 +36,7 @@ constexpr int32_t IP_SHARE_LINK_NOT_SECURE = -3;
 constexpr int32_t IP_SHARE_PROFILE_FAILED = -4;
 constexpr int32_t IP_SHARE_RESOURCE_FAILED = -5;
 constexpr auto SUPPORT_WAIT = std::chrono::seconds(30);
-}
+} // namespace
 
 NearlinkIpShareService &NearlinkIpShareService::GetInstance()
 {
@@ -52,13 +61,14 @@ int32_t NearlinkIpShareService::Initialize()
         HILOGE("[IpShare][Service] initialize failed at IPoSL profile ret=%{public}d", profileRet);
         return IP_SHARE_PROFILE_FAILED;
     }
-    int32_t channelRet = NearlinkIpShareChannel::GetInstance().Initialize([this](bool established, int32_t error, uint64_t generation) {
-        DoInIpShareThread([this, established, error, generation]() {
-            if (NearlinkIpShareChannel::GetInstance().IsCurrentGeneration(generation)) {
-                HandleChannelState(established, error);
-            }
+    int32_t channelRet =
+        NearlinkIpShareChannel::GetInstance().Initialize([this](bool established, int32_t error, uint64_t generation) {
+            DoInIpShareThread([this, established, error, generation]() {
+                if (NearlinkIpShareChannel::GetInstance().IsCurrentGeneration(generation)) {
+                    HandleChannelState(established, error);
+                }
+            });
         });
-    });
     if (channelRet != 0) {
         HILOGE("[IpShare][Service] initialize failed at IPv4 channel ret=%{public}d", channelRet);
         IposlProfileDeinit();
@@ -94,7 +104,7 @@ void NearlinkIpShareService::ResetForAdapterStop()
 }
 
 int32_t NearlinkIpShareService::ValidateSecurePeer(const std::string &peerAddress, uint8_t peer[6],
-    uint8_t &addressType) const
+                                                   uint8_t &addressType) const
 {
     if (!IsValidAddress(peerAddress) || peer == nullptr) {
         HILOGE("[IpShare][Service] secure-peer validation failed: invalid argument");
@@ -137,7 +147,7 @@ int32_t NearlinkIpShareService::IsPeerSupported(const std::string &peerAddress, 
     if (!initialized_ || status_.role != NearlinkIpShareRole::NONE ||
         (status_.state != NearlinkIpShareState::IDLE && !probeInProgress_)) {
         HILOGE("[IpShare][Service] support probe rejected initialized=%{public}d role=%{public}d state=%{public}d",
-            initialized_, static_cast<int32_t>(status_.role), static_cast<int32_t>(status_.state));
+               initialized_, static_cast<int32_t>(status_.role), static_cast<int32_t>(status_.state));
         return IP_SHARE_INVALID_STATE;
     }
     if (!probeInProgress_ && memcmp(supportedPeer_, peer, sizeof(supportedPeer_)) == 0 && peerSupported_) {
@@ -153,14 +163,14 @@ int32_t NearlinkIpShareService::IsPeerSupported(const std::string &peerAddress, 
         status_.state = NearlinkIpShareState::DISCOVERING;
         status_.peerAddress = peerAddress;
         HILOGI("[IpShare][Service] support probe dispatched to IPoSL thread addressType=%{public}u", addressType);
-        auto peerCopy = std::array<uint8_t, 6> {};
+        auto peerCopy = std::array<uint8_t, 6>{};
         (void)memcpy(peerCopy.data(), peer, peerCopy.size());
         DoInIpShareThread([peerCopy, addressType]() {
             int32_t ret = IposlProfileProbePeer(peerCopy.data(), addressType);
             if (ret != IPOSL_SUCCESS) {
                 HILOGE("[IpShare][Service] support probe failed to start IPoSL discovery ret=%{public}d", ret);
-                NearlinkIpShareService::GetInstance().HandlePeerSupported(
-                    peerCopy.data(), false, IP_SHARE_PROFILE_FAILED);
+                NearlinkIpShareService::GetInstance().HandlePeerSupported(peerCopy.data(), false,
+                                                                          IP_SHARE_PROFILE_FAILED);
             }
         });
     }
@@ -186,7 +196,7 @@ int32_t NearlinkIpShareService::IsPeerSupported(const std::string &peerAddress, 
 }
 
 int32_t NearlinkIpShareService::BeginRole(NearlinkIpShareRole role, const std::string &peerAddress,
-    const uint8_t peer[6], uint8_t addressType)
+                                          const uint8_t peer[6], uint8_t addressType)
 {
     NearlinkIpShareStatus status;
     sptr<INearlinkIpShareObserver> observer;
@@ -200,11 +210,15 @@ int32_t NearlinkIpShareService::BeginRole(NearlinkIpShareRole role, const std::s
         if (!initialized_ || probeInProgress_ || status_.state != NearlinkIpShareState::IDLE ||
             status_.role != NearlinkIpShareRole::NONE) {
             HILOGE("[IpShare][Service] role start rejected initialized=%{public}d probe=%{public}d role=%{public}d "
-                "state=%{public}d", initialized_, probeInProgress_, static_cast<int32_t>(status_.role),
-                static_cast<int32_t>(status_.state));
+                   "state=%{public}d",
+                   initialized_, probeInProgress_, static_cast<int32_t>(status_.role),
+                   static_cast<int32_t>(status_.state));
             return IP_SHARE_INVALID_STATE;
         }
-        if (NearlinkIpShareChannel::GetInstance().SetPeer(peer, addressType) != 0) {
+        SLE_Addr_S local = SleProperties::GetInstance().GetLocalSleAddress();
+        bool gateway = role == NearlinkIpShareRole::GATEWAY;
+        if (NearlinkIpShareChannel::GetInstance().SetPeer(peer, addressType, gateway, gateway ? peer : local.addr) !=
+            0) {
             return IP_SHARE_INVALID_STATE; // Cancelled QoSM work is still draining; retry later.
         }
         status_ = {};
@@ -217,8 +231,8 @@ int32_t NearlinkIpShareService::BeginRole(NearlinkIpShareRole role, const std::s
         status = status_;
         observer = observer_;
     }
-    HILOGI("[IpShare][Service] role start accepted role=%{public}d addressType=%{public}u",
-        static_cast<int32_t>(role), addressType);
+    HILOGI("[IpShare][Service] role start accepted role=%{public}d addressType=%{public}u", static_cast<int32_t>(role),
+           addressType);
     NotifyStatus(status, observer);
     return IP_SHARE_OK;
 }
@@ -234,7 +248,7 @@ int32_t NearlinkIpShareService::StartGateway(const std::string &peerAddress)
         HILOGI("[IpShare][Service] gateway start result=%{public}d", ret);
         return ret == 1 ? IP_SHARE_OK : ret;
     }
-    auto peerCopy = std::array<uint8_t, 6> {};
+    auto peerCopy = std::array<uint8_t, 6>{};
     (void)memcpy(peerCopy.data(), peer, peerCopy.size());
     DoInIpShareThread([this, peerCopy, addressType]() {
         int32_t serverRet = IposlProfileStartServer(peerCopy.data(), addressType);
@@ -270,8 +284,8 @@ int32_t NearlinkIpShareService::StartTerminal(const std::string &gatewayAddress)
         return ret == 1 ? IP_SHARE_OK : ret;
     }
     SLE_Addr_S local = SleProperties::GetInstance().GetLocalSleAddress();
-    auto peerCopy = std::array<uint8_t, 6> {};
-    auto localCopy = std::array<uint8_t, 6> {};
+    auto peerCopy = std::array<uint8_t, 6>{};
+    auto localCopy = std::array<uint8_t, 6>{};
     (void)memcpy(peerCopy.data(), peer, peerCopy.size());
     (void)memcpy(localCopy.data(), local.addr, localCopy.size());
     SetState(NearlinkIpShareState::DISCOVERING);
@@ -279,8 +293,7 @@ int32_t NearlinkIpShareService::StartTerminal(const std::string &gatewayAddress)
         int32_t ret = IposlProfileStartTerminal(peerCopy.data(), addressType, localCopy.data());
         if (ret != IPOSL_SUCCESS) {
             HILOGE("[IpShare][Service] terminal start failed at IPoSL client ret=%{public}d", ret);
-            NearlinkIpShareService::GetInstance().HandleConfigured(
-                peerCopy.data(), false, IP_SHARE_PROFILE_FAILED);
+            NearlinkIpShareService::GetInstance().HandleConfigured(peerCopy.data(), false, IP_SHARE_PROFILE_FAILED);
         }
     });
     HILOGI("[IpShare][Service] terminal start dispatched; waiting for IPoSL callbacks");
@@ -295,7 +308,9 @@ int32_t NearlinkIpShareService::Stop()
             HILOGE("[IpShare][Service] stop rejected: not initialized");
             return IP_SHARE_INVALID_STATE;
         }
-        if (status_.state == NearlinkIpShareState::STOPPING) return IP_SHARE_OK;
+        if (status_.state == NearlinkIpShareState::STOPPING) {
+            return IP_SHARE_OK;
+        }
         status_.state = NearlinkIpShareState::STOPPING;
     }
     HILOGI("[IpShare][Service] stop dispatched");
@@ -335,7 +350,7 @@ int32_t NearlinkIpShareService::GetStatus(NearlinkIpShareStatus &status) const
     }
     status = status_;
     HILOGD("[IpShare][Service] status query role=%{public}d state=%{public}d error=%{public}d",
-        static_cast<int32_t>(status.role), static_cast<int32_t>(status.state), status.errorCode);
+           static_cast<int32_t>(status.role), static_cast<int32_t>(status.state), status.errorCode);
     return IP_SHARE_OK;
 }
 
@@ -365,11 +380,10 @@ void NearlinkIpShareService::OnPeerSupported(const uint8_t peer[6], bool support
         HILOGE("[IpShare][Service] support callback ignored: peer is null");
         return;
     }
-    auto peerCopy = std::array<uint8_t, 6> {};
+    auto peerCopy = std::array<uint8_t, 6>{};
     (void)memcpy(peerCopy.data(), peer, peerCopy.size());
-    DoInIpShareThread([peerCopy, supported, error]() {
-        GetInstance().HandlePeerSupported(peerCopy.data(), supported, error);
-    });
+    DoInIpShareThread(
+        [peerCopy, supported, error]() { GetInstance().HandlePeerSupported(peerCopy.data(), supported, error); });
     HILOGI("[IpShare][Service] support callback queued supported=%{public}d error=%{public}d", supported, error);
 }
 
@@ -397,7 +411,7 @@ void NearlinkIpShareService::HandlePeerSupported(const uint8_t peer[6], bool sup
     probeCondition_.notify_all();
     NotifyStatus(status, observer);
     HILOGI("[IpShare][Service] support callback handled supported=%{public}d error=%{public}d", reportedSupported,
-        error);
+           error);
 }
 
 void NearlinkIpShareService::OnConfigured(const uint8_t peer[6], bool opened, int32_t error)
@@ -406,18 +420,16 @@ void NearlinkIpShareService::OnConfigured(const uint8_t peer[6], bool opened, in
         HILOGE("[IpShare][Service] configuration callback ignored: peer is null");
         return;
     }
-    auto peerCopy = std::array<uint8_t, 6> {};
+    auto peerCopy = std::array<uint8_t, 6>{};
     (void)memcpy(peerCopy.data(), peer, peerCopy.size());
-    DoInIpShareThread([peerCopy, opened, error]() {
-        GetInstance().HandleConfigured(peerCopy.data(), opened, error);
-    });
+    DoInIpShareThread([peerCopy, opened, error]() { GetInstance().HandleConfigured(peerCopy.data(), opened, error); });
     HILOGI("[IpShare][Service] configuration callback queued opened=%{public}d error=%{public}d", opened, error);
 }
 
 void NearlinkIpShareService::HandleConfigured(const uint8_t peer[6], bool opened, int32_t error)
 {
     NearlinkIpShareRole role;
-    std::array<uint8_t, 6> activePeer {};
+    std::array<uint8_t, 6> activePeer{};
     uint8_t addressType = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -480,7 +492,8 @@ void NearlinkIpShareService::HandleChannelState(bool established, int32_t error)
         HILOGI("[IpShare][Service] peer released channel; gateway remains ready");
         SetState(NearlinkIpShareState::IFACE_READY);
     } else {
-        if (error == 0) error = IP_SHARE_RESOURCE_FAILED;
+        if (error == 0)
+            error = IP_SHARE_RESOURCE_FAILED;
         HILOGE("[IpShare][Service] QoSM channel failed error=%{public}d", error);
         SetState(NearlinkIpShareState::ERROR, "channel", error);
     }
@@ -499,12 +512,12 @@ void NearlinkIpShareService::SetState(NearlinkIpShareState state, const std::str
         observer = observer_;
     }
     HILOGI("[IpShare][Service] state transition role=%{public}d state=%{public}d stage=%{public}s error=%{public}d",
-        static_cast<int32_t>(status.role), static_cast<int32_t>(state), errorStage.c_str(), error);
+           static_cast<int32_t>(status.role), static_cast<int32_t>(state), errorStage.c_str(), error);
     NotifyStatus(status, observer);
 }
 
 void NearlinkIpShareService::NotifyStatus(const NearlinkIpShareStatus &status,
-    const sptr<INearlinkIpShareObserver> &observer) const
+                                          const sptr<INearlinkIpShareObserver> &observer) const
 {
     if (observer != nullptr) {
         observer->OnStatusChanged(status);
@@ -513,4 +526,4 @@ void NearlinkIpShareService::NotifyStatus(const NearlinkIpShareStatus &status,
     }
 }
 
-}  // namespace OHOS::Nearlink
+} // namespace OHOS::Nearlink
