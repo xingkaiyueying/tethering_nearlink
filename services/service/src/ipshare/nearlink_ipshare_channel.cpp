@@ -18,6 +18,7 @@
 
 #include "log.h"
 #include "iposl_profile.h"
+#include "nearlink_ipshare_service.h"
 #include "sdf_buff.h"
 
 namespace OHOS::Nearlink {
@@ -126,14 +127,9 @@ int32_t NearlinkIpShareChannel::Initialize(const StateCallback &callback)
         HILOGI("[IpShare][Channel] initialize updated callback for active channel");
         return 0;
     }
-    int32_t ret = DTAP_RegisterProtoRecvCbk(DTAP_PI_IPV4, &NearlinkIpShareChannel::OnIpv4Received);
-    if (ret != 0) {
-        HILOGE("[IpShare][Channel] initialize failed: DTAP IPv4 callback registration ret=%{public}d", ret);
-        return -1;
-    }
     callback_ = callback;
     initialized_ = true;
-    HILOGI("[IpShare][Channel] initialize completed: DTAP IPv4 callback registered");
+    HILOGI("[IpShare][Channel] initialize completed: PI callbacks deferred until mode reservation");
     return 0;
 }
 
@@ -142,12 +138,70 @@ void NearlinkIpShareChannel::Deinitialize()
     HILOGI("[IpShare][Channel] deinitialize started");
     Close();
     std::lock_guard<std::mutex> lock(mutex_);
-    if (initialized_) {
-        (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV4);
-    }
     initialized_ = false;
     callback_ = nullptr;
     HILOGI("[IpShare][Channel] deinitialize completed");
+}
+
+bool NearlinkIpShareChannel::IsDrained()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return !active_ && !channelPending_ && !channelEstablished_ && !releasing_ && mode_ == 0 && !tun_.IsOpen();
+}
+
+int32_t NearlinkIpShareChannel::ResetBinding(uint64_t generation)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || channelPending_ || channelEstablished_ || releasing_) return -1;
+    enabled_ = false;
+    if (mode_ != 0) (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV4);
+    if (mode_ == 3) (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV6);
+    mode_ = 0;
+    generation_ = generation;
+    return 0;
+}
+
+
+int32_t NearlinkIpShareChannel::PrepareMode(uint8_t mode)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || !initialized_ || enabled_ || channelEstablished_ || channelPending_ ||
+        (mode != 0 && mode != 1 && mode != 3)) return -1;
+    if (mode == mode_) return 0;
+    if (mode_ != 0) (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV4);
+    if (mode_ == 3) (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV6);
+    mode_ = 0;
+    if (mode == 0) return 0;
+    if (DTAP_RegisterProtoRecvCbk(DTAP_PI_IPV4, &OnIpv4Received) != 0) return -1;
+    if (mode == 3 && DTAP_RegisterProtoRecvCbk(DTAP_PI_IPV6, &OnIpv6Received) != 0) {
+        (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV4);
+        return -1;
+    }
+    mode_ = mode;
+    return 0;
+}
+
+int32_t NearlinkIpShareChannel::EnableMode(uint8_t mode)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || mode == 0 || mode != mode_) return -1;
+    enabled_ = true;
+    return 0;
+}
+
+bool NearlinkIpShareChannel::CanSend(uint16_t lcid, uint8_t tcid, uint8_t pi, uint64_t generation)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return active_ && enabled_ && channelEstablished_ && lcid == lcid_ && tcid == tcid_ &&
+        generation == generation_ && (pi == 1 || (pi == 2 && mode_ == 3));
+}
+
+int NearlinkIpShareChannel::OnIpv6Received(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
+{
+    auto &channel = GetInstance();
+    int ret = channel.Receive(info, buffer);
+    if (ret != 0) ++channel.rejected_;
+    return ret;
 }
 
 int32_t NearlinkIpShareChannel::CreateTun()
@@ -155,7 +209,8 @@ int32_t NearlinkIpShareChannel::CreateTun()
     HILOGI("[IpShare][Channel] create TUN requested");
     int32_t ret = tun_.Open([this](const uint8_t *data, uint16_t length) {
         if (Send(data, length) != 0) {
-            HILOGW("[IpShare][Channel] drop outbound IPv4 packet");
+            ++rejected_;
+            HILOGW("[IpShare][Channel] drop outbound IP packet");
         }
     });
     if (ret != 0) {
@@ -167,15 +222,16 @@ int32_t NearlinkIpShareChannel::CreateTun()
 }
 
 int32_t NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressType, bool gateway,
-                                        const uint8_t *clientKey)
+                                        const uint8_t *clientKey, const uint8_t *localLayer2, uint64_t generation)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     // QoSM has no creation request ID. Do not reuse the binding until old work is drained.
-    if (peer == nullptr || !initialized_ || channelPending_ || channelEstablished_ || releasing_ || active_) {
+    if (peer == nullptr || localLayer2 == nullptr || generation == 0 || !initialized_ || channelPending_ || channelEstablished_ || releasing_ || active_) {
         return -1;
     }
     (void)memcpy(peer_, peer, sizeof(peer_));
     addressType_ = addressType;
+    memcpy(localLayer2_, localLayer2, sizeof(localLayer2_));
     gateway_ = gateway;
     memcpy(clientKey_, clientKey == nullptr ? peer : clientKey, sizeof(clientKey_));
     dhcpDiscover_ = false;
@@ -183,7 +239,9 @@ int32_t NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressTy
     dhcpBound_ = false;
     boundIp_ = 0;
     active_ = true;
-    ++generation_;
+    generation_ = generation;
+    enabled_ = false;
+    rx4_ = 0; rx6_ = 0; tx4_ = 0; tx6_ = 0; rejected_ = 0;
     return 0;
 }
 
@@ -202,7 +260,7 @@ int32_t NearlinkIpShareChannel::Open(const uint8_t peer[6], uint8_t addressType)
     QOSM_TransChannelParams_S params = {};
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!initialized_ || !active_ || releasing_ || channelPending_ || channelEstablished_ ||
+        if (!initialized_ || !active_ || !enabled_ || releasing_ || channelPending_ || channelEstablished_ ||
             memcmp(peer_, peer, sizeof(peer_)) != 0 || addressType_ != addressType) {
             HILOGE("[IpShare][Channel] open rejected initialized=%{public}d pending=%{public}d established=%{public}d",
                    initialized_, channelPending_, channelEstablished_);
@@ -242,7 +300,7 @@ void NearlinkIpShareChannel::Close()
         std::lock_guard<std::mutex> lock(mutex_);
         if (active_) {
             active_ = false;
-            ++generation_;
+            enabled_ = false;
         }
         if (channelEstablished_ || releasing_) {
             (void)memcpy(release.addr.addr, peer_, sizeof(peer_));
@@ -251,6 +309,9 @@ void NearlinkIpShareChannel::Close()
             destroy = true;
             releasing_ = true;
         }
+        if (mode_ != 0) (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV4);
+        if (mode_ == 3) (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV6);
+        mode_ = 0;
         // Retain pending creation and release identity for late completion and repeated Stop.
         channelEstablished_ = false;
         dhcpBound_ = false;
@@ -266,7 +327,10 @@ void NearlinkIpShareChannel::Close()
         }
     }
     tun_.Close();
-    HILOGI("[IpShare][Channel] channel and TUN closed");
+    HILOGI("[IpShare][Channel] closed rx4=%{public}llu rx6=%{public}llu tx4=%{public}llu tx6=%{public}llu rejected=%{public}llu",
+        static_cast<unsigned long long>(rx4_.load()), static_cast<unsigned long long>(rx6_.load()),
+        static_cast<unsigned long long>(tx4_.load()), static_cast<unsigned long long>(tx6_.load()),
+        static_cast<unsigned long long>(rejected_.load()));
 }
 
 bool NearlinkIpShareChannel::IsIpSharePort(uint16_t port)
@@ -283,7 +347,7 @@ bool NearlinkIpShareChannel::CanAccept(uint16_t port)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     const uint8_t emptyPeer[6] = {0};
-    bool accept = IsIpSharePort(port) && initialized_ && active_ && !releasing_ && !channelPending_ &&
+    bool accept = IsIpSharePort(port) && initialized_ && enabled_ && active_ && !releasing_ && !channelPending_ &&
                   !channelEstablished_ && tun_.IsOpen() && memcmp(peer_, emptyPeer, sizeof(peer_)) != 0;
     if (accept) {
         channelPending_ = true;
@@ -357,6 +421,7 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
                 error = params->status == QOSM_TRANS_CHANNEL_RELEASED ? 0 : -1;
             }
         }
+        if (!active_ && !channelPending_ && !releasing_ && !channelEstablished_) callback = callback_;
         generation = generation_;
     }
     if (destroy) {
@@ -371,12 +436,15 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
 
 int NearlinkIpShareChannel::OnIpv4Received(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
 {
-    return GetInstance().Receive(info, buffer);
+    auto &channel = GetInstance();
+    int ret = channel.Receive(info, buffer);
+    if (ret != 0) ++channel.rejected_;
+    return ret;
 }
 
 int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
 {
-    if (info == nullptr || buffer == nullptr || info->pi != DTAP_PI_IPV4) {
+    if (info == nullptr || buffer == nullptr || (info->pi != DTAP_PI_IPV4 && info->pi != DTAP_PI_IPV6)) {
         HILOGE("[DHCP][IpShare][RX] packet rejected: invalid DTAP input");
         return -1;
     }
@@ -396,16 +464,24 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
         generation = generation_;
     }
     uint16_t length = static_cast<uint16_t>(dataLen);
+    if (!IposlCodecValidatePacket(info->pi, data, length) ||
+        !NearlinkIpShareService::CanSend(info->lcid, info->tcid, info->pi, generation)) return -1;
     if (!AuthorizePacket(data, length, generation, true)) {
         HILOGW("[DHCP][IpShare][RX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d", length,
                bound);
         return -1;
     }
+    /* Recheck under the ownership lock through delivery; stop cannot close/reopen underneath it. */
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || !enabled_ || generation != generation_) return -1;
     int32_t ret = tun_.Write(data, length);
     if (ret != 0) {
         HILOGE("[DHCP][IpShare][RX] delivery to TUN failed ret=%{public}d length=%{public}u", ret, length);
         return ret;
     }
+    if (info->pi == 1) ++rx4_; else ++rx6_;
+    HILOGD("[IpShare][RX] pi=%{public}u lcid=%{public}u tcid=%{public}u sdu=%{public}u",
+        info->pi, info->lcid, info->tcid, length);
     return 0;
 }
 
@@ -431,11 +507,14 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
                bound);
         return -1;
     }
-    int32_t ret = IposlProfileSendIpv4(lcid, tcid, data, length);
+    uint8_t pi = data[0] >> 4 == 6 ? DTAP_PI_IPV6 : DTAP_PI_IPV4;
+    int32_t ret = IposlProfileSendIp(lcid, tcid, pi, data, length, generation);
     if (ret != 0) {
         HILOGE("[DHCP][IpShare][TX] DTAP send failed lcid=%{public}u tcid=%{public}u ret=%{public}d", lcid, tcid, ret);
         return -1;
     }
+    if (pi == 1) ++tx4_; else ++tx6_;
+    HILOGD("[IpShare][TX] pi=%{public}u lcid=%{public}u tcid=%{public}u sdu=%{public}u", pi, lcid, tcid, length);
     return 0;
 }
 
@@ -625,7 +704,7 @@ bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, u
         return false;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!active_ || !channelEstablished_ || generation != generation_ ||
+    if (!active_ || !enabled_ || !channelEstablished_ || generation != generation_ ||
         memcmp(clientKey_, packet.key, sizeof(clientKey_)) != 0) {
         return false;
     }
@@ -634,13 +713,21 @@ bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, u
 
 bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received)
 {
-    if (!ValidateIpv4(data, length)) {
-        return false;
+    uint8_t pi = data != nullptr && length != 0 && data[0] >> 4 == 6 ? 2 : 1;
+    if (!IposlCodecValidatePacket(pi, data, length)) return false;
+    if (pi == 2) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!active_ || !enabled_ || !channelEstablished_ || generation != generation_ || mode_ != 3) return false;
+        uint8_t source[16], destination[16];
+        IposlCodecS1LinkLocal(received ? peer_ : localLayer2_, source);
+        IposlCodecS1LinkLocal(received ? localLayer2_ : peer_, destination);
+        // S1 has no learned IPv6 mappings. Authorize only this authenticated pair's fixed link-local endpoints.
+        return memcmp(data + 8, source, 16) == 0 && memcmp(data + 24, destination, 16) == 0;
     }
     bool fromClient;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!active_ || !channelEstablished_ || generation != generation_) {
+        if (!active_ || !enabled_ || !channelEstablished_ || generation != generation_) {
             return false;
         }
         fromClient = gateway_ == received;
@@ -653,7 +740,7 @@ bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t lengt
         return ObserveDhcp(data, length, generation);
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!active_ || !channelEstablished_ || generation != generation_ || !DhcpBoundLocked()) {
+    if (!active_ || !enabled_ || !channelEstablished_ || generation != generation_ || !DhcpBoundLocked()) {
         return false;
     }
     // The negotiated Demo mode is unicast. Public Internet reply sources remain valid.

@@ -28,6 +28,10 @@ public:
     int32_t GetStatus(NearlinkIpShareStatus &status) override;
     int32_t RegisterObserver(const sptr<INearlinkIpShareObserver> &observer) override;
     int32_t UnregisterObserver() override;
+    int32_t QueryNearlinkIpShareCapabilities(const std::string &peerAddress, NearlinkIpShareCapabilities &capabilities) override;
+    int32_t StartNearlinkGatewayWithMode(const std::string &peerAddress, int32_t mode) override;
+    int32_t StartNearlinkTerminalWithMode(const std::string &peerAddress, int32_t mode) override;
+
 };
 
 }  // namespace OHOS::Nearlink

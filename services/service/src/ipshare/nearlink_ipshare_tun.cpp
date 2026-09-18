@@ -41,6 +41,12 @@ int32_t SetInterfaceUp(const char *ifname)
     }
     struct ifreq request = {};
     (void)strncpy(request.ifr_name, ifname, IFNAMSIZ - 1);
+    request.ifr_mtu = IP_SHARE_PACKET_MAX;
+    if (ioctl(socketFd, SIOCSIFMTU, &request) < 0) {
+        int error = errno;
+        (void)close(socketFd);
+        return -error;
+    }
     if (ioctl(socketFd, SIOCGIFFLAGS, &request) < 0) {
         int error = errno;
         (void)close(socketFd);
@@ -155,7 +161,7 @@ bool NearlinkIpShareTun::IsOpen() const
 
 void NearlinkIpShareTun::ReadLoop()
 {
-    uint8_t packet[IP_SHARE_PACKET_MAX] = {0};
+    uint8_t packet[IP_SHARE_PACKET_MAX + 1] = {0};
     HILOGI("[IpShare][Tun] read loop started");
     while (running_.load()) {
         int fd = -1;
@@ -178,7 +184,7 @@ void NearlinkIpShareTun::ReadLoop()
             continue;
         }
         ssize_t length = read(fd, packet, sizeof(packet));
-        if (length > 0 && callback) {
+        if (length > 0 && length <= static_cast<ssize_t>(IP_SHARE_PACKET_MAX) && callback) {
 
             callback(packet, static_cast<uint16_t>(length));
         } else if (length < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {

@@ -17,10 +17,27 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "parcel.h"
 
 namespace OHOS::Nearlink {
+
+enum class NearlinkIpShareMode : int32_t { NONE = 0, IPV4 = 1, DUAL_STACK = 3 };
+inline bool IsIpShareMode(int32_t mode) { return mode == 1 || mode == 3; }
+
+class NearlinkIpShareCapabilities final : public Parcelable {
+public:
+    bool identifierPresent {false};
+    int32_t discoveryState {0}; // 0 unknown, 1 discovered, 2 absent
+    std::vector<int32_t> localModes {1, 3};
+    std::vector<int32_t> peerModes;
+    bool peerCapabilityKnown {false};
+    bool Marshalling(Parcel &parcel) const override;
+    static NearlinkIpShareCapabilities *Unmarshalling(Parcel &parcel);
+    bool ReadFromParcel(Parcel &parcel);
+};
+
 
 enum class NearlinkIpShareRole : int32_t {
     NONE = 0,
@@ -53,6 +70,12 @@ public:
     bool hasUpstream {false};
     std::string errorStage;
     int32_t errorCode {0};
+    std::string contextId;
+    uint64_t generation {0};
+    uint64_t sequence {0};
+    NearlinkIpShareMode requestedMode {NearlinkIpShareMode::NONE};
+    NearlinkIpShareMode selectedMode {NearlinkIpShareMode::NONE};
+    bool serviceReady {false};
 
     bool Marshalling(Parcel &parcel) const override;
     static NearlinkIpShareStatus *Unmarshalling(Parcel &parcel);

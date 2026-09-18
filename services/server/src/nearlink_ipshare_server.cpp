@@ -73,4 +73,19 @@ int32_t NearlinkIpShareServer::UnregisterObserver()
     return ret;
 }
 
+int32_t NearlinkIpShareServer::QueryNearlinkIpShareCapabilities(const std::string &peerAddress, NearlinkIpShareCapabilities &capabilities)
+{
+    return NearlinkIpShareService::GetInstance().QueryNearlinkIpShareCapabilities(peerAddress, capabilities);
+}
+
+int32_t NearlinkIpShareServer::StartNearlinkGatewayWithMode(const std::string &peerAddress, int32_t mode)
+{
+    return NearlinkIpShareService::GetInstance().StartNearlinkGatewayWithMode(peerAddress, mode);
+}
+
+int32_t NearlinkIpShareServer::StartNearlinkTerminalWithMode(const std::string &peerAddress, int32_t mode)
+{
+    return NearlinkIpShareService::GetInstance().StartNearlinkTerminalWithMode(peerAddress, mode);
+}
+
 }  // namespace OHOS::Nearlink

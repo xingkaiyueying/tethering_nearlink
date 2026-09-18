@@ -34,6 +34,10 @@ NearlinkIpShareStub::NearlinkIpShareStub()
         {NL_IPSHARE_GET_STATUS, {GetStatusInner, permission}},
         {NL_IPSHARE_REGISTER_OBSERVER, {RegisterObserverInner, permission}},
         {NL_IPSHARE_UNREGISTER_OBSERVER, {UnregisterObserverInner, permission}},
+        {NL_IPSHARE_QUERY_CAPABILITIES, {QueryNearlinkIpShareCapabilitiesInner, permission}},
+        {NL_IPSHARE_START_GATEWAY_WITH_MODE, {StartNearlinkGatewayWithModeInner, permission}},
+        {NL_IPSHARE_START_TERMINAL_WITH_MODE, {StartNearlinkTerminalWithModeInner, permission}},
+
     };
 }
 
@@ -155,6 +159,33 @@ int32_t NearlinkIpShareStub::UnregisterObserverInner(NearlinkIpShareStub *stub, 
     }
     HILOGI("[IpShare][IPC] observer unregistration handled ret=%{public}d", ret);
     return NO_ERROR;
+}
+
+int32_t NearlinkIpShareStub::QueryNearlinkIpShareCapabilitiesInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
+{
+    std::string address;
+    if (!data.ReadString(address) || address.size() != 17) return TRANSACTION_ERR;
+    NearlinkIpShareCapabilities capabilities;
+    int32_t ret = stub->QueryNearlinkIpShareCapabilities(address, capabilities);
+    return reply.WriteInt32(ret) && (ret != 0 || reply.WriteParcelable(&capabilities)) ? NO_ERROR : TRANSACTION_ERR;
+}
+
+int32_t NearlinkIpShareStub::StartNearlinkGatewayWithModeInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
+{
+    std::string address;
+    if (!data.ReadString(address) || address.size() != 17) return TRANSACTION_ERR;
+    int32_t mode = 0;
+    if (!data.ReadInt32(mode) || !IsIpShareMode(mode)) return TRANSACTION_ERR;
+    return reply.WriteInt32(stub->StartNearlinkGatewayWithMode(address, mode)) ? NO_ERROR : TRANSACTION_ERR;
+}
+
+int32_t NearlinkIpShareStub::StartNearlinkTerminalWithModeInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
+{
+    std::string address;
+    if (!data.ReadString(address) || address.size() != 17) return TRANSACTION_ERR;
+    int32_t mode = 0;
+    if (!data.ReadInt32(mode) || !IsIpShareMode(mode)) return TRANSACTION_ERR;
+    return reply.WriteInt32(stub->StartNearlinkTerminalWithMode(address, mode)) ? NO_ERROR : TRANSACTION_ERR;
 }
 
 }  // namespace OHOS::Nearlink

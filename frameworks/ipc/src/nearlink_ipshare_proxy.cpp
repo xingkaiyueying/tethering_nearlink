@@ -162,4 +162,44 @@ int32_t NearlinkIpShareProxy::UnregisterObserver()
     return ret;
 }
 
+int32_t NearlinkIpShareProxy::QueryNearlinkIpShareCapabilities(const std::string &peerAddress, NearlinkIpShareCapabilities &capabilities)
+{
+    MessageParcel data, reply;
+    if (peerAddress.size() != 17) return NL_ERR_INVALID_PARAM;
+    if (!data.WriteInterfaceToken(GetDescriptor()) || !data.WriteString(peerAddress))
+        return NL_ERR_IPC_TRANS_FAILED;
+    int32_t ret = Transact(NL_IPSHARE_QUERY_CAPABILITIES, data, reply);
+    if (ret != NL_NO_ERROR) return ret;
+    if (!reply.ReadInt32(ret)) return NL_ERR_IPC_TRANS_FAILED;
+    if (ret != 0) return ret;
+    std::unique_ptr<NearlinkIpShareCapabilities> value(reply.ReadParcelable<NearlinkIpShareCapabilities>());
+    if (!value) return NL_ERR_IPC_TRANS_FAILED;
+    capabilities = *value;
+    return ret;
+}
+
+int32_t NearlinkIpShareProxy::StartNearlinkGatewayWithMode(const std::string &peerAddress, int32_t mode)
+{
+    MessageParcel data, reply;
+    if (peerAddress.size() != 17 || !IsIpShareMode(mode)) return NL_ERR_INVALID_PARAM;
+    if (!data.WriteInterfaceToken(GetDescriptor()) || !data.WriteString(peerAddress) || !data.WriteInt32(mode))
+        return NL_ERR_IPC_TRANS_FAILED;
+    int32_t ret = Transact(NL_IPSHARE_START_GATEWAY_WITH_MODE, data, reply);
+    if (ret != NL_NO_ERROR) return ret;
+    if (!reply.ReadInt32(ret)) return NL_ERR_IPC_TRANS_FAILED;
+    return ret;
+}
+
+int32_t NearlinkIpShareProxy::StartNearlinkTerminalWithMode(const std::string &peerAddress, int32_t mode)
+{
+    MessageParcel data, reply;
+    if (peerAddress.size() != 17 || !IsIpShareMode(mode)) return NL_ERR_INVALID_PARAM;
+    if (!data.WriteInterfaceToken(GetDescriptor()) || !data.WriteString(peerAddress) || !data.WriteInt32(mode))
+        return NL_ERR_IPC_TRANS_FAILED;
+    int32_t ret = Transact(NL_IPSHARE_START_TERMINAL_WITH_MODE, data, reply);
+    if (ret != NL_NO_ERROR) return ret;
+    if (!reply.ReadInt32(ret)) return NL_ERR_IPC_TRANS_FAILED;
+    return ret;
+}
+
 }  // namespace OHOS::Nearlink

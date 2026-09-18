@@ -16,6 +16,7 @@
 
 #include <cstdio>
 #include <new>
+#include <mutex>
 
 #include "i_nearlink_ipshare.h"
 #include "nearlink_errorcode.h"
@@ -35,6 +36,13 @@ public:
 
     void OnStatusChanged(const NearlinkIpShareStatus &status) override
     {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (status.generation < generation_ ||
+                (status.generation == generation_ && status.sequence <= sequence_)) return;
+            generation_ = status.generation;
+            sequence_ = status.sequence;
+        }
         auto observer = observer_.lock();
         if (observer != nullptr) {
             observer->OnStatusChanged(status);
@@ -43,6 +51,9 @@ public:
 
 private:
     std::weak_ptr<NearlinkIpShareObserver> observer_;
+    std::mutex mutex_;
+    uint64_t generation_ {0};
+    uint64_t sequence_ {0};
 };
 }
 
@@ -193,6 +204,8 @@ int32_t NearlinkIpShareClient::RegisterObserver(const std::shared_ptr<NearlinkIp
     int32_t ret = proxy->RegisterObserver(observerStub);
     if (ret == NL_NO_ERROR) {
         pimpl_->observerStub = observerStub;
+        NearlinkIpShareStatus snapshot;
+        if (proxy->GetStatus(snapshot) == 0) observerStub->OnStatusChanged(snapshot);
     }
     HILOGI("[IpShare][Client] observer registration ret=%{public}d", ret);
     return ret;
@@ -211,6 +224,30 @@ int32_t NearlinkIpShareClient::UnregisterObserver() const
     }
     HILOGI("[IpShare][Client] observer unregistration ret=%{public}d", ret);
     return ret;
+}
+
+int32_t NearlinkIpShareClient::QueryNearlinkIpShareCapabilities(const std::string &peerAddress, NearlinkIpShareCapabilities &capabilities) const
+{
+    int32_t ret = ValidateClientAddress(peerAddress);
+    if (ret != 0) return ret;
+    auto proxy = GetIpShareProxy();
+    return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->QueryNearlinkIpShareCapabilities(peerAddress, capabilities);
+}
+
+int32_t NearlinkIpShareClient::StartNearlinkGatewayWithMode(const std::string &peerAddress, int32_t mode) const
+{
+    int32_t ret = ValidateClientAddress(peerAddress);
+    if (ret != 0) return ret;
+    auto proxy = GetIpShareProxy();
+    return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->StartNearlinkGatewayWithMode(peerAddress, mode);
+}
+
+int32_t NearlinkIpShareClient::StartNearlinkTerminalWithMode(const std::string &peerAddress, int32_t mode) const
+{
+    int32_t ret = ValidateClientAddress(peerAddress);
+    if (ret != 0) return ret;
+    auto proxy = GetIpShareProxy();
+    return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->StartNearlinkTerminalWithMode(peerAddress, mode);
 }
 
 }  // namespace OHOS::Nearlink
@@ -279,5 +316,40 @@ extern "C" int32_t NlIpShareGetStatus(NlIpShareStatusC *status)
     status->hasUpstream = value.hasUpstream ? 1 : 0;
     CopyText(status->errorStage, value.errorStage);
     status->errorCode = value.errorCode;
+    CopyText(status->contextId, value.contextId);
+    status->generation = value.generation;
+    status->sequence = value.sequence;
+    status->requestedMode = static_cast<int32_t>(value.requestedMode);
+    status->selectedMode = static_cast<int32_t>(value.selectedMode);
+    status->serviceReady = value.serviceReady;
     return OHOS::Nearlink::NL_NO_ERROR;
+}
+
+extern "C" int32_t NlIpShareStartGatewayWithMode(const char *peerAddress, int32_t mode)
+{
+    if (peerAddress == nullptr || !OHOS::Nearlink::IsIpShareMode(mode)) return -1;
+    return OHOS::Nearlink::NearlinkIpShareClient::GetInstance().StartNearlinkGatewayWithMode(peerAddress, mode);
+}
+
+extern "C" int32_t NlIpShareStartTerminalWithMode(const char *peerAddress, int32_t mode)
+{
+    if (peerAddress == nullptr || !OHOS::Nearlink::IsIpShareMode(mode)) return -1;
+    return OHOS::Nearlink::NearlinkIpShareClient::GetInstance().StartNearlinkTerminalWithMode(peerAddress, mode);
+}
+
+extern "C" int32_t NlIpShareQueryCapabilities(const char *peerAddress, NlIpShareCapabilitiesC *capabilities)
+{
+    if (peerAddress == nullptr || capabilities == nullptr) return -1;
+    OHOS::Nearlink::NearlinkIpShareCapabilities value;
+    int32_t ret = OHOS::Nearlink::NearlinkIpShareClient::GetInstance().QueryNearlinkIpShareCapabilities(peerAddress, value);
+    if (ret != 0) return ret;
+    *capabilities = {};
+    capabilities->identifierPresent = value.identifierPresent;
+    capabilities->discoveryState = value.discoveryState;
+    capabilities->localModeCount = value.localModes.size();
+    capabilities->peerModeCount = value.peerModes.size();
+    capabilities->peerCapabilityKnown = value.peerCapabilityKnown;
+    for (size_t i = 0; i < value.localModes.size(); ++i) capabilities->localModes[i] = value.localModes[i];
+    for (size_t i = 0; i < value.peerModes.size(); ++i) capabilities->peerModes[i] = value.peerModes[i];
+    return 0;
 }
