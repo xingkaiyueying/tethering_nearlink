@@ -158,6 +158,8 @@ int32_t NearlinkIpShareChannel::ResetBinding(uint64_t generation)
     if (mode_ == 3) (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV6);
     mode_ = 0;
     generation_ = generation;
+    ipv6_.Reset();
+    addressSequence_ = 0;
     return 0;
 }
 
@@ -186,6 +188,22 @@ int32_t NearlinkIpShareChannel::EnableMode(uint8_t mode)
     std::lock_guard<std::mutex> lock(mutex_);
     if (!active_ || mode == 0 || mode != mode_) return -1;
     enabled_ = true;
+    return 0;
+}
+
+int32_t NearlinkIpShareChannel::UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    NearlinkIpShareIpv6::Address binary{};
+    if (!active_ || !enabled_ || mode_ != 3 || !channelEstablished_ || address.generation != generation_ ||
+        address.sequence <= addressSequence_ || address.prefixLength > 128 ||
+        !NearlinkIpShareTun::ParseIpv6Evidence(address.address, address.ifindex, binary.data())) return -1;
+    if (address.validLifetime && (address.flags & (0x40 | 0x08 | 0x04)) == 0 &&
+        !NearlinkIpShareTun::IsIpv6AddressUsable(binary.data())) return -1;
+    auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto next = ipv6_;
+    if (!next.ApplyLocal(binary, !gateway_, address.flags, address.preferredLifetime, address.validLifetime, now)) return -1;
+    ipv6_ = std::move(next); addressSequence_ = address.sequence;
     return 0;
 }
 
@@ -233,6 +251,8 @@ int32_t NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressTy
     addressType_ = addressType;
     memcpy(localLayer2_, localLayer2, sizeof(localLayer2_));
     gateway_ = gateway;
+    ipv6_.Reset();
+    addressSequence_ = 0;
     memcpy(clientKey_, clientKey == nullptr ? peer : clientKey, sizeof(clientKey_));
     dhcpDiscover_ = false;
     dhcpRequest_ = false;
@@ -317,6 +337,7 @@ void NearlinkIpShareChannel::Close()
         dhcpBound_ = false;
         dhcpRequest_ = false;
         boundIp_ = 0;
+        ipv6_.Reset();
     }
     if (destroy) {
         int32_t ret = QOSM_TransChannelDestroy(&release);
@@ -487,6 +508,15 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
 
 int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
 {
+    std::vector<uint8_t> adapted;
+    if (data && length >= 40 && data[0] >> 4 == 6) {
+        adapted.assign(data, data + length);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!NearlinkIpShareIpv6::AddLayer2Option(adapted, localLayer2_)) return -1;
+        }
+        data = adapted.data(); length = static_cast<uint16_t>(adapted.size());
+    }
     uint16_t lcid = 0;
     uint8_t tcid = 0;
     bool bound = false;
@@ -718,11 +748,21 @@ bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t lengt
     if (pi == 2) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!active_ || !enabled_ || !channelEstablished_ || generation != generation_ || mode_ != 3) return false;
-        uint8_t source[16], destination[16];
-        IposlCodecS1LinkLocal(received ? peer_ : localLayer2_, source);
-        IposlCodecS1LinkLocal(received ? localLayer2_ : peer_, destination);
-        // S1 has no learned IPv6 mappings. Authorize only this authenticated pair's fixed link-local endpoints.
-        return memcmp(data + 8, source, 16) == 0 && memcmp(data + 24, destination, 16) == 0;
+        const uint8_t unspecified[16]{};
+        if (!received && memcmp(data + 8, unspecified, 16) != 0 &&
+            (!gateway_ || (data[6] == 58 && length >= 48 && data[40] >= 133 && data[40] <= 136)) &&
+            !NearlinkIpShareTun::IsIpv6AddressUsable(data + 8)) return false;
+        auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        bool allowed = ipv6_.Authorize(data, length, gateway_ == received,
+            received ? peer_ : localLayer2_, static_cast<uint64_t>(seconds));
+        if (allowed) {
+            size_t confirmed = 0;
+            for (const auto &mapping : ipv6_.Mappings()) if (mapping.confirmed) ++confirmed;
+            HILOGD("[IpShare][IPv6] generation=%{public}llu records=%{public}zu confirmed=%{public}zu",
+                static_cast<unsigned long long>(generation_), ipv6_.Mappings().size(), confirmed);
+        }
+        return allowed;
     }
     bool fromClient;
     {

@@ -15,6 +15,7 @@
 #include "nearlink_ipshare_client.h"
 
 #include <cstdio>
+#include <cstring>
 #include <new>
 #include <mutex>
 
@@ -250,6 +251,12 @@ int32_t NearlinkIpShareClient::StartNearlinkTerminalWithMode(const std::string &
     return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->StartNearlinkTerminalWithMode(peerAddress, mode);
 }
 
+int32_t NearlinkIpShareClient::UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address) const
+{
+    auto proxy = GetIpShareProxy();
+    return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->UpdateValidatedAddress(address);
+}
+
 }  // namespace OHOS::Nearlink
 
 namespace {
@@ -352,4 +359,14 @@ extern "C" int32_t NlIpShareQueryCapabilities(const char *peerAddress, NlIpShare
     for (size_t i = 0; i < value.localModes.size(); ++i) capabilities->localModes[i] = value.localModes[i];
     for (size_t i = 0; i < value.peerModes.size(); ++i) capabilities->peerModes[i] = value.peerModes[i];
     return 0;
+}
+
+extern "C" int32_t NlIpShareUpdateValidatedAddress(const NlIpShareIpv6AddressC *address)
+{
+    if (!address || strnlen(address->address, sizeof(address->address)) >= sizeof(address->address)) return -1;
+    OHOS::Nearlink::NearlinkIpShareAddressEvidence value;
+    value.generation = address->generation; value.sequence = address->sequence; value.address = address->address;
+    value.ifindex = address->ifindex; value.prefixLength = address->prefixLength; value.flags = address->flags;
+    value.preferredLifetime = address->preferredLifetime; value.validLifetime = address->validLifetime;
+    return OHOS::Nearlink::NearlinkIpShareClient::GetInstance().UpdateValidatedAddress(value);
 }

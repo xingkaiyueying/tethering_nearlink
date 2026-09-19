@@ -35,6 +35,8 @@ int32_t NearlinkIpShareTun::Open(const PacketCallback &) { fd_=1; return 0; }
 void NearlinkIpShareTun::Close() { fd_=-1; }
 int32_t NearlinkIpShareTun::Write(const uint8_t *,uint16_t) { ++writes; return 0; }
 bool NearlinkIpShareTun::IsOpen() const { return fd_>=0; }
+bool NearlinkIpShareTun::ParseIpv6Evidence(const std::string &,uint32_t,uint8_t *) { return false; }
+bool NearlinkIpShareTun::IsIpv6AddressUsable(const uint8_t *) { return true; }
 }
 struct Observer : INearlinkIpShareObserver {
     uint64_t generation=0, sequence=0; int events=0;

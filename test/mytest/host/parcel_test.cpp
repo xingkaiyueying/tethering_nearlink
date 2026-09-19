@@ -41,4 +41,19 @@ int main()
     Parcel oversized; oversized.bytes.resize(65537);
     NearlinkIpShareStatus target; assert(!target.ReadFromParcel(oversized));
     cap.peerModes = {1,1}; Parcel duplicate; assert(!cap.Marshalling(duplicate));
+    NearlinkIpShareAddressEvidence evidence;
+    evidence.generation = 3; evidence.sequence = 1; evidence.address = "fd77::2";
+    evidence.ifindex = 7; evidence.prefixLength = 64; evidence.preferredLifetime = 10; evidence.validLifetime = 30;
+    Parcel addressParcel; assert(evidence.Write(addressParcel));
+    for (size_t n = 0; n < addressParcel.bytes.size(); ++n) {
+        Parcel truncated; truncated.bytes.assign(addressParcel.bytes.begin(), addressParcel.bytes.begin() + n);
+        NearlinkIpShareAddressEvidence result; result.address = "unchanged";
+        assert(!result.Read(truncated) && result.address == "unchanged");
+    }
+    NearlinkIpShareAddressEvidence decoded; assert(decoded.Read(addressParcel) && decoded.validLifetime == 30);
+    evidence.preferredLifetime = 31; Parcel invalid; assert(!evidence.Write(invalid));
+    invalid.bytes = addressParcel.bytes;
+    uint32_t badPreferred = 31;
+    memcpy(invalid.bytes.data() + invalid.bytes.size() - 8, &badPreferred, sizeof(badPreferred));
+    assert(!decoded.Read(invalid));
 }

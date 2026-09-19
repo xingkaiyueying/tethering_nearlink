@@ -242,7 +242,7 @@ static int RunBearer(const char *role, const char *localText, const char *peerTe
             ReceiveProbe(fd, dhcp, sizeof(dhcp), status.generation);
     }
     for (uint8_t round = 0; round < 8 && ok; ++round) {
-        for (uint8_t pi = 1; pi <= (status.selectedMode == 3 ? 2 : 1) && ok; ++pi) {
+        for (uint8_t pi = 1; pi <= 1 && ok; ++pi) {
             uint8_t tx[1500], rx[1500];
             ProbeData(tx, pi, gateway, local, peer, round);
             ProbeData(rx, pi, !gateway, peer, local, round);
@@ -255,7 +255,7 @@ static int RunBearer(const char *role, const char *localText, const char *peerTe
         }
     }
     close(fd);
-    printf("RESULT=%s state=BEARER_ONLY (not address configuration or Internet validation)\n", ok ? "PASS" : "FAIL");
+    printf("RESULT=%s state=BEARER_IPV4_ONLY (S2 IPv6 requires kernel DAD/SLAAC and real-address traffic)\n", ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }
 

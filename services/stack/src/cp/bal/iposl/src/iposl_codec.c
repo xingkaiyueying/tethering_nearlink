@@ -176,8 +176,13 @@ bool IposlCodecValidatePacket(uint8_t pi, const uint8_t *data, size_t length)
     unsigned count = 0;
     uint8_t next = data[6];
     while (next == 0 || next == 43 || next == 60 || next == 51 || next == 44) {
-        /* No trusted IPv6 address mapping exists in S1: fragments cannot be authorized. */
-        if (next == 44 || ++count > 8 || length - offset < 2) return false;
+        if (++count > 8 || length - offset < 2) return false;
+        if (next == 44) {
+            /* Structural check only; the channel requires an existing formal address mapping. */
+            return length - offset > 8 && bytes + 8 <= 256 && data[offset + 1] == 0 &&
+                (data[offset] == 6 || data[offset] == 17) && (data[offset + 3] & 6) == 0 &&
+                (!(data[offset + 3] & 1) || (length - offset - 8) % 8 == 0);
+        }
         size_t size = next == 51 ? ((size_t)data[offset + 1] + 2) * 4 :
             ((size_t)data[offset + 1] + 1) * 8;
         if (size > length - offset || bytes + size > 256) return false;

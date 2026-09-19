@@ -19,6 +19,7 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
     for source in [*profile.glob('src/*.[ch]'), profile / 'interface/iposl_profile.h',
                    channel / 'nearlink_ipshare_channel.cpp', channel / 'nearlink_ipshare_channel.h',
                    channel / 'nearlink_ipshare_tun.h', here.parent / 'sleip_probe_packets.h',
+                   channel / 'nearlink_ipshare_ipv6.h',
                    repo / 'services/stack/src/cp/bsl/sle/qosm/interface/qosm_trans_channel.h',
                    repo / 'ipc_parcel/parcel/nearlink_ipshare_status.h',
                    repo / 'ipc_parcel/parcel/nearlink_ipshare_status.cpp',

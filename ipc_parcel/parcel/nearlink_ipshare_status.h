@@ -23,6 +23,30 @@
 
 namespace OHOS::Nearlink {
 
+struct NearlinkIpShareAddressEvidence {
+    uint64_t generation{0}, sequence{0};
+    std::string address;
+    uint32_t ifindex{0}, prefixLength{0}, flags{0}, preferredLifetime{0}, validLifetime{0};
+    bool Write(Parcel &p) const
+    {
+        return generation && sequence && !address.empty() && address.size() <= 45 && ifindex &&
+            prefixLength <= 128 && preferredLifetime <= validLifetime &&
+            p.WriteUint64(generation) && p.WriteUint64(sequence) && p.WriteString(address) &&
+            p.WriteUint32(ifindex) && p.WriteUint32(prefixLength) && p.WriteUint32(flags) &&
+            p.WriteUint32(preferredLifetime) && p.WriteUint32(validLifetime);
+    }
+    bool Read(Parcel &p)
+    {
+        NearlinkIpShareAddressEvidence a;
+        if (!p.ReadUint64(a.generation) || !p.ReadUint64(a.sequence) || !p.ReadString(a.address) ||
+            !p.ReadUint32(a.ifindex) || !p.ReadUint32(a.prefixLength) || !p.ReadUint32(a.flags) ||
+            !p.ReadUint32(a.preferredLifetime) || !p.ReadUint32(a.validLifetime) ||
+            !a.generation || !a.sequence || a.address.empty() || a.address.size()>45 || !a.ifindex ||
+            a.prefixLength>128 || a.preferredLifetime>a.validLifetime) return false;
+        *this = a; return true;
+    }
+};
+
 enum class NearlinkIpShareMode : int32_t { NONE = 0, IPV4 = 1, DUAL_STACK = 3 };
 inline bool IsIpShareMode(int32_t mode) { return mode == 1 || mode == 3; }
 

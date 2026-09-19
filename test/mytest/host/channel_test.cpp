@@ -7,6 +7,7 @@
 #include <atomic>
 #include "iposl_codec.c"
 #include "sleip_probe_packets.h"
+#include "ipv6_test_packets.h"
 #define private public
 #include "nearlink_ipshare_channel.cpp"
 #undef private
@@ -28,6 +29,12 @@ int32_t NearlinkIpShareTun::Open(const PacketCallback &) { fd_ = 1; return 0; }
 void NearlinkIpShareTun::Close() { fd_ = -1; }
 int32_t NearlinkIpShareTun::Write(const uint8_t *, uint16_t) { ++tunWrites; return fd_ >= 0 ? 0 : -1; }
 bool NearlinkIpShareTun::IsOpen() const { return fd_ >= 0; }
+bool NearlinkIpShareTun::ParseIpv6Evidence(const std::string &text,uint32_t index,uint8_t *out)
+{
+    if (text != "fe80::42" || index != 7) return false;
+    auto address = Lla(0x42); std::copy(address.begin(), address.end(), out); return true;
+}
+bool NearlinkIpShareTun::IsIpv6AddressUsable(const uint8_t *) { return true; } // kernel boundary
 }
 int main()
 {
@@ -47,6 +54,31 @@ int main()
     c.HandleChannelStatus(&rsp);
     assert(creates == 1 && c.channelEstablished_);
     assert(c.SetPeer(peer,0,true,peer,local,11) != 0);
+    NearlinkIpShareAddressEvidence evidence;
+    evidence.address = "fe80::42"; evidence.ifindex = 7; evidence.prefixLength = 64;
+    evidence.generation = 10; evidence.sequence = 1; evidence.flags = 0x40;
+    evidence.preferredLifetime = 20; evidence.validLifetime = 40;
+    assert(c.UpdateValidatedAddress(evidence) == 0);
+    assert(c.UpdateValidatedAddress(evidence) != 0); // repeated sequence
+    evidence.sequence = 2; evidence.generation = 9; assert(c.UpdateValidatedAddress(evidence) != 0);
+    evidence.generation = 10; evidence.ifindex = 8; assert(c.UpdateValidatedAddress(evidence) != 0);
+    evidence.ifindex = 7; evidence.flags = 0; assert(c.UpdateValidatedAddress(evidence) == 0);
+    evidence.sequence = 3; evidence.preferredLifetime = evidence.validLifetime = 0;
+    assert(c.UpdateValidatedAddress(evidence) == 0 && c.ipv6_.Mappings().empty());
+
+    // The S1 fixed endpoints require the same DAD/first-source authorization as every S2 address.
+    uint8_t peerLla[16], localLla[16];
+    IposlCodecS1LinkLocal(peer, peerLla); IposlCodecS1LinkLocal(local, localLla);
+    Address peerAddr{}, localAddr{};
+    std::copy(peerLla, peerLla + 16, peerAddr.begin());
+    std::copy(localLla, localLla + 16, localAddr.begin());
+    auto pd = Dad(peerAddr), ld = Dad(localAddr);
+    assert(c.AuthorizePacket(pd.data(), pd.size(), 10, true));
+    assert(c.AuthorizePacket(ld.data(), ld.size(), 10, false));
+    auto first = Echo(peerAddr, localAddr);
+    assert(c.AuthorizePacket(first.data(), first.size(), 10, true));
+    first = Echo(localAddr, peerAddr);
+    assert(c.AuthorizePacket(first.data(), first.size(), 10, false));
     uint8_t packet[1500]; SDF_Buff_S buffer = {}; DTAP_Data_Info_S info = {2,3,4};
     ProbeData(packet,2,false,peer,local,1); memcpy(buffer.data,packet,1500); buffer.size = 1500;
     assert(registered[2](&info,&buffer) == 0 && tunWrites == 1);

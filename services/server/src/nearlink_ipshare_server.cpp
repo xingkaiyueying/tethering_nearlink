@@ -88,4 +88,9 @@ int32_t NearlinkIpShareServer::StartNearlinkTerminalWithMode(const std::string &
     return NearlinkIpShareService::GetInstance().StartNearlinkTerminalWithMode(peerAddress, mode);
 }
 
+int32_t NearlinkIpShareServer::UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address)
+{
+    return NearlinkIpShareService::GetInstance().UpdateValidatedAddress(address);
+}
+
 }  // namespace OHOS::Nearlink

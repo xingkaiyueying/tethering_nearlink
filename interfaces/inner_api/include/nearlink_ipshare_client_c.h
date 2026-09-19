@@ -53,6 +53,13 @@ typedef struct NlIpShareCapabilitiesC {
     int32_t peerCapabilityKnown;
 } NlIpShareCapabilitiesC;
 
+typedef struct NlIpShareIpv6AddressC {
+    uint64_t generation, sequence;
+    char address[46];
+    uint32_t ifindex, prefixLength, flags, preferredLifetime, validLifetime;
+} NlIpShareIpv6AddressC;
+int32_t NlIpShareUpdateValidatedAddress(const NlIpShareIpv6AddressC *address);
+
 int32_t NlIpShareQueryCapabilities(const char *peerAddress, NlIpShareCapabilitiesC *capabilities);
 int32_t NlIpShareStartGatewayWithMode(const char *peerAddress, int32_t mode);
 int32_t NlIpShareStartTerminalWithMode(const char *peerAddress, int32_t mode);

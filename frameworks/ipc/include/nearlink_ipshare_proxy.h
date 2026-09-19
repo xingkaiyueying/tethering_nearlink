@@ -25,6 +25,7 @@ public:
     explicit NearlinkIpShareProxy(const sptr<IRemoteObject> &impl);
     ~NearlinkIpShareProxy() override = default;
 
+    int32_t UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address) override;
     int32_t IsPeerSupported(const std::string &peerAddress, bool &supported) override;
     int32_t StartGateway(const std::string &peerAddress) override;
     int32_t StartTerminal(const std::string &gatewayAddress) override;

@@ -33,6 +33,7 @@ class NEARLINK_API NearlinkIpShareClient final {
 public:
     static NearlinkIpShareClient &GetInstance();
 
+    int32_t UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address) const;
     int32_t IsPeerSupported(const std::string &peerAddress, bool &supported) const;
     int32_t StartGateway(const std::string &peerAddress) const;
     int32_t StartTerminal(const std::string &gatewayAddress) const;

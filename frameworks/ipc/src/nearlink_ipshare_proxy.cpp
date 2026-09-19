@@ -202,4 +202,13 @@ int32_t NearlinkIpShareProxy::StartNearlinkTerminalWithMode(const std::string &p
     return ret;
 }
 
+int32_t NearlinkIpShareProxy::UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address)
+{
+    MessageParcel data, reply;
+    if (!data.WriteInterfaceToken(GetDescriptor()) || !address.Write(data)) return NL_ERR_IPC_TRANS_FAILED;
+    int32_t ret = Transact(NL_IPSHARE_UPDATE_VALIDATED_ADDRESS, data, reply);
+    if (ret != 0) return ret;
+    return reply.ReadInt32(ret) ? ret : NL_ERR_IPC_TRANS_FAILED;
+}
+
 }  // namespace OHOS::Nearlink

@@ -697,4 +697,8 @@ void NearlinkIpShareService::NotifyStatus(const NearlinkIpShareStatus &status,
     }
 }
 
+int32_t NearlinkIpShareService::UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address)
+{
+    return NearlinkIpShareChannel::GetInstance().UpdateValidatedAddress(address);
+}
 } // namespace OHOS::Nearlink

@@ -27,6 +27,7 @@ NearlinkIpShareStub::NearlinkIpShareStub()
     // The private profile has the same local authorization boundary as its system caller.
     auto permission = CHECK_PERM(true, MULTI_PERM(ACCESS_NEARLINK, CONNECTIVITY_INTERNAL));
     memberFuncMap_ = {
+        {NL_IPSHARE_UPDATE_VALIDATED_ADDRESS, {UpdateValidatedAddressInner, permission}},
         {NL_IPSHARE_IS_PEER_SUPPORTED, {IsPeerSupportedInner, permission}},
         {NL_IPSHARE_START_GATEWAY, {StartGatewayInner, permission}},
         {NL_IPSHARE_START_TERMINAL, {StartTerminalInner, permission}},
@@ -186,6 +187,13 @@ int32_t NearlinkIpShareStub::StartNearlinkTerminalWithModeInner(NearlinkIpShareS
     int32_t mode = 0;
     if (!data.ReadInt32(mode) || !IsIpShareMode(mode)) return TRANSACTION_ERR;
     return reply.WriteInt32(stub->StartNearlinkTerminalWithMode(address, mode)) ? NO_ERROR : TRANSACTION_ERR;
+}
+
+int32_t NearlinkIpShareStub::UpdateValidatedAddressInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
+{
+    NearlinkIpShareAddressEvidence address;
+    if (data.GetReadableBytes() > 256 || !address.Read(data) || data.GetReadableBytes() != 0) return TRANSACTION_ERR;
+    return reply.WriteInt32(stub->UpdateValidatedAddress(address)) ? NO_ERROR : TRANSACTION_ERR;
 }
 
 }  // namespace OHOS::Nearlink

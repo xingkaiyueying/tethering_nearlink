@@ -23,6 +23,8 @@
 
 #include "dtap.h"
 #include "nearlink_ipshare_tun.h"
+#include "nearlink_ipshare_ipv6.h"
+#include "nearlink_ipshare_status.h"
 #include "qosm_trans_channel.h"
 
 namespace OHOS::Nearlink {
@@ -43,6 +45,7 @@ public:
                     const uint8_t *clientKey = nullptr, const uint8_t *localLayer2 = nullptr, uint64_t generation = 0);
     int32_t PrepareMode(uint8_t mode);
     bool IsDrained();
+    int32_t UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address);
     int32_t ResetBinding(uint64_t generation);
     int32_t EnableMode(uint8_t mode);
     bool CanSend(uint16_t lcid, uint8_t tcid, uint8_t pi, uint64_t generation);
@@ -83,6 +86,8 @@ private:
     bool ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation);
     bool AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received);
     bool gateway_{true};
+    NearlinkIpShareIpv6 ipv6_;
+    uint64_t addressSequence_{0};
     uint8_t clientKey_[6]{};
     bool dhcpDiscover_{false};
     std::chrono::steady_clock::time_point transactionExpiry_{};

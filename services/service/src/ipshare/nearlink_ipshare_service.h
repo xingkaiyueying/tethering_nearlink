@@ -31,6 +31,7 @@ public:
     int32_t Initialize();
     void Shutdown();
     void ResetForAdapterStop();
+    int32_t UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address);
     int32_t IsPeerSupported(const std::string &peerAddress, bool &supported);
     int32_t StartGateway(const std::string &peerAddress);
     int32_t StartTerminal(const std::string &gatewayAddress);
