@@ -32,6 +32,13 @@ static std::vector<uint8_t> Dad(Address target)
     std::copy(target.begin() + 13, target.end(), d.begin() + 13);
     auto p = Packet(135, {}, d, 24); std::copy(target.begin(), target.end(), p.begin() + 48); Checksum(p); return p;
 }
+static std::vector<uint8_t> Na(Address owner, Address destination)
+{
+    auto p = Packet(136, owner, destination, 24);
+    p[44] = 0x20;
+    std::copy(owner.begin(), owner.end(), p.begin() + 48);
+    Checksum(p); return p;
+}
 static std::vector<uint8_t> Ra(uint32_t preferred = 30, uint32_t valid = 90)
 {
     auto p = Packet(134, Lla(1), Group(1), 56);

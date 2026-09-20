@@ -49,7 +49,12 @@ public:
         record->conflict = (flags & 0x08) != 0;
         record->confirmed = false;
         if ((flags & (0x40 | 0x08 | 0x04)) != 0) return true;
-        return Confirm(address, terminal);
+        return ConfirmOwner(address, terminal, now);
+    }
+    bool ObserveKernelLocal(const Address &address, bool terminal, uint64_t now)
+    {
+        Expire(now);
+        return ConfirmOwner(address, terminal, now);
     }
     static bool AddLayer2Option(std::vector<uint8_t> &packet, const uint8_t sender[6])
     {
@@ -169,6 +174,17 @@ private:
         m->confirmed = true;
         return true;
     }
+    bool ConfirmOwner(const Address &a, bool terminal, uint64_t now)
+    {
+        if (!Candidate(a, terminal, now)) return false;
+        auto owner = Find(a, terminal);
+        auto other = Find(a, !terminal);
+        owner->conflict = false;
+        // A non-tentative local address or an authenticated NA wins over an
+        // unconfirmed DAD candidate. An already confirmed owner still wins.
+        if (other && !other->confirmed) other->conflict = true;
+        return Confirm(a, terminal);
+    }
     bool LearnPrefix(const uint8_t *option, uint64_t now)
     {
         if (option[1] != 4 || option[2] != 64 || (option[3] & 0x40) == 0 ||
@@ -261,7 +277,10 @@ private:
                     if (unspecified || (!Group(destination, 1) && !Known(destination, !terminal)) ||
                         (Group(destination, 1) && (p[offset + 4] & 0x40))) return false;
                     // This Demo does not proxy NA. A tentative address must never emit NA.
-                    if (source != target || !Confirm(target, terminal)) return false;
+                    auto owner = Find(target, terminal);
+                    auto claimant = Find(target, !terminal);
+                    if (source != target || (!owner && (!claimant || claimant->confirmed)) ||
+                        !ConfirmOwner(target, terminal, now)) return false;
                 }
             }
             if (!Options(p, n, offset + fixed, type, unspecified, sender, now)) return false;

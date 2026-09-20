@@ -204,6 +204,22 @@ int32_t NearlinkIpShareChannel::UpdateValidatedAddress(const NearlinkIpShareAddr
     auto next = ipv6_;
     if (!next.ApplyLocal(binary, !gateway_, address.flags, address.preferredLifetime, address.validLifetime, now)) return -1;
     ipv6_ = std::move(next); addressSequence_ = address.sequence;
+    size_t confirmed = 0;
+    size_t terminalConfirmed = 0;
+    size_t conflicts = 0;
+    for (const auto &mapping : ipv6_.Mappings()) {
+        if (mapping.confirmed) {
+            ++confirmed;
+            if (mapping.terminal) ++terminalConfirmed;
+        }
+        if (mapping.conflict) ++conflicts;
+    }
+    HILOGI("[IpShare][IPv6] local evidence address=%{public}s sequence=%{public}llu flags=%{public}u "
+        "preferred=%{public}u valid=%{public}u records=%{public}zu confirmed=%{public}zu "
+        "terminalConfirmed=%{public}zu gatewayConfirmed=%{public}zu conflicts=%{public}zu",
+        address.address.c_str(), static_cast<unsigned long long>(address.sequence), address.flags,
+        address.preferredLifetime, address.validLifetime, ipv6_.Mappings().size(), confirmed, terminalConfirmed,
+        confirmed - terminalConfirmed, conflicts);
     return 0;
 }
 
@@ -488,8 +504,8 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
     if (!IposlCodecValidatePacket(info->pi, data, length) ||
         !NearlinkIpShareService::CanSend(info->lcid, info->tcid, info->pi, generation)) return -1;
     if (!AuthorizePacket(data, length, generation, true)) {
-        HILOGW("[DHCP][IpShare][RX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d", length,
-               bound);
+        HILOGW("[IpShare][RX] packet rejected by IP policy pi=%{public}u length=%{public}u dhcpBound=%{public}d",
+               info->pi, length, bound);
         return -1;
     }
     /* Recheck under the ownership lock through delivery; stop cannot close/reopen underneath it. */
@@ -533,8 +549,9 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
         generation = generation_;
     }
     if (!AuthorizePacket(data, length, generation, false)) {
-        HILOGW("[DHCP][IpShare][TX] packet rejected by IPv4 policy length=%{public}u dhcpBound=%{public}d", length,
-               bound);
+        uint8_t version = data != nullptr && length != 0 ? data[0] >> 4 : 0;
+        HILOGW("[IpShare][TX] packet rejected by IP policy version=%{public}u length=%{public}u dhcpBound=%{public}d",
+               version, length, bound);
         return -1;
     }
     uint8_t pi = data[0] >> 4 == 6 ? DTAP_PI_IPV6 : DTAP_PI_IPV4;
@@ -749,18 +766,37 @@ bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t lengt
         std::lock_guard<std::mutex> lock(mutex_);
         if (!active_ || !enabled_ || !channelEstablished_ || generation != generation_ || mode_ != 3) return false;
         const uint8_t unspecified[16]{};
-        if (!received && memcmp(data + 8, unspecified, 16) != 0 &&
-            (!gateway_ || (data[6] == 58 && length >= 48 && data[40] >= 133 && data[40] <= 136)) &&
-            !NearlinkIpShareTun::IsIpv6AddressUsable(data + 8)) return false;
         auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        bool allowed = ipv6_.Authorize(data, length, gateway_ == received,
+        bool localControl = data[6] == 58 && length >= 48 && data[40] >= 133 && data[40] <= 136;
+        bool verifyLocal = !received && memcmp(data + 8, unspecified, 16) != 0 && (!gateway_ || localControl);
+        auto next = ipv6_;
+        if (verifyLocal && (!NearlinkIpShareTun::IsIpv6AddressUsable(data + 8) ||
+            !next.ObserveKernelLocal(NearlinkIpShareIpv6::Address{data[8], data[9], data[10], data[11],
+                data[12], data[13], data[14], data[15], data[16], data[17], data[18], data[19],
+                data[20], data[21], data[22], data[23]}, !gateway_, static_cast<uint64_t>(seconds)))) return false;
+        size_t oldRecords = ipv6_.Mappings().size();
+        size_t oldConfirmed = std::count_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(),
+            [](const auto &mapping) { return mapping.confirmed; });
+        size_t oldConflicts = std::count_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(),
+            [](const auto &mapping) { return mapping.conflict; });
+        bool allowed = next.Authorize(data, length, gateway_ == received,
             received ? peer_ : localLayer2_, static_cast<uint64_t>(seconds));
         if (allowed) {
-            size_t confirmed = 0;
-            for (const auto &mapping : ipv6_.Mappings()) if (mapping.confirmed) ++confirmed;
-            HILOGD("[IpShare][IPv6] generation=%{public}llu records=%{public}zu confirmed=%{public}zu",
-                static_cast<unsigned long long>(generation_), ipv6_.Mappings().size(), confirmed);
+            ipv6_ = std::move(next);
+            size_t confirmed = std::count_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(),
+                [](const auto &mapping) { return mapping.confirmed; });
+            size_t terminalConfirmed = std::count_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(),
+                [](const auto &mapping) { return mapping.confirmed && mapping.terminal; });
+            size_t conflicts = std::count_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(),
+                [](const auto &mapping) { return mapping.conflict; });
+            if (oldRecords != ipv6_.Mappings().size() || oldConfirmed != confirmed || oldConflicts != conflicts) {
+                HILOGI("[IpShare][IPv6] mapping transition generation=%{public}llu direction=%{public}s "
+                    "records=%{public}zu confirmed=%{public}zu terminalConfirmed=%{public}zu "
+                    "gatewayConfirmed=%{public}zu conflicts=%{public}zu",
+                    static_cast<unsigned long long>(generation_), received ? "rx" : "tx",
+                    ipv6_.Mappings().size(), confirmed, terminalConfirmed, confirmed - terminalConfirmed, conflicts);
+            }
         }
         return allowed;
     }

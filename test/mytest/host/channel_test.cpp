@@ -66,6 +66,14 @@ int main()
     evidence.sequence = 3; evidence.preferredLifetime = evidence.validLifetime = 0;
     assert(c.UpdateValidatedAddress(evidence) == 0 && c.ipv6_.Mappings().empty());
 
+    // The RA fixture configures the gateway address in the kernel, outside the DHCP evidence callback.
+    // A verified local NA must therefore seed that owner before policy validation and defeat peer DAD.
+    auto ra = Ra(); assert(c.AuthorizePacket(ra.data(), ra.size(), 10, false));
+    auto occupiedDad = Dad(Global(1)); assert(c.AuthorizePacket(occupiedDad.data(), occupiedDad.size(), 10, true));
+    auto ownerNa = Na(Global(1), Group(1)); assert(c.AuthorizePacket(ownerNa.data(), ownerNa.size(), 10, false));
+    assert(std::count_if(c.ipv6_.Mappings().begin(), c.ipv6_.Mappings().end(),
+        [](const auto &mapping) { return mapping.conflict; }) == 1);
+
     // The S1 fixed endpoints require the same DAD/first-source authorization as every S2 address.
     uint8_t peerLla[16], localLla[16];
     IposlCodecS1LinkLocal(peer, peerLla); IposlCodecS1LinkLocal(local, localLla);

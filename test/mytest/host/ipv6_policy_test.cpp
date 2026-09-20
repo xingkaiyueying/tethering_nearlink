@@ -35,6 +35,14 @@ int main()
     assert(accept(Echo(Global(2), Global(1)), true)); // full mapping table preserves old traffic
     policy.Reset(); assert(accept(Ra(), false)); assert(accept(Dad(Global(2)), true));
     assert(accept(Dad(Global(2)), false)); assert(!accept(Echo(Global(2), Global(1)), true)); // simultaneous DAD
+    policy.Reset(); assert(accept(Ra(), false));
+    assert(policy.ApplyLocal(Global(1), false, 0, 30, 90, 1)); // gateway kernel owns ::1
+    assert(accept(Dad(Global(1)), true));
+    assert(accept(Na(Global(1), Group(1)), false)); // authenticated owner defeats A's DAD candidate
+    assert(!accept(Echo(Global(1), Global(1)), true));
+    policy.Reset(); assert(accept(Ra(), false)); assert(accept(Dad(Global(1)), true));
+    assert(accept(Na(Global(1), Group(1)), false)); // peer owner may be learned from NA during local DAD
+    assert(!accept(Echo(Global(1), Global(1)), true));
     policy.Reset(); assert(accept(Ra(), false)); assert(accept(Dad(Global(2)), true));
     policy.Expire(62); assert(!accept(Echo(Global(2), Global(1)), true, 62)); // silence cannot confirm
     policy.Reset(); assert(accept(Ra(), false)); assert(accept(Dad(Global(2)), true));
