@@ -27,7 +27,21 @@ int main()
     fragment[40] = 17; fragment[43] = 1;
     assert(accept(fragment, true)); // formal TCP/UDP mapping delegates reassembly to kernel
     fragment[23] = 99; assert(!accept(fragment, true)); // fragment cannot create/promote mapping
-    fragment[23] = 2; fragment[40] = 58; assert(!accept(fragment, true)); // fragmented ICMP/ND
+    fragment[23] = 2; fragment[40] = 58; fragment[48] = 135;
+    assert(!accept(fragment, true)); // ND fragments cannot reach the control path
+    auto echoFragment = Echo(Global(2), Global(1));
+    echoFragment.insert(echoFragment.begin() + 40, 8, 0);
+    echoFragment[5] = echoFragment.size() - 40; echoFragment[6] = 44; echoFragment[40] = 58;
+    assert(accept(echoFragment, true)); // checksummed atomic Echo fragment
+    auto remote = Global(90); remote[0] = 0x20; remote[1] = 1;
+    for (uint8_t type : {1, 2, 3, 4}) {
+        auto error = Packet(type, remote, Global(2), 56); error[7] = 64; Checksum(error);
+        assert(accept(error, false));
+        error[39] = 99; Checksum(error); assert(!accept(error, false));
+    }
+    auto opaque = Echo(remote, Global(2)); opaque[6] = 253;
+    assert(accept(opaque, false)); // confirmed data is independent of the upper protocol
+    opaque = Echo(Global(2), remote); opaque[6] = 253; assert(accept(opaque, true));
     for (uint8_t i = 3; i < 10; ++i) {
         assert(accept(Dad(Global(i)), true)); assert(accept(Echo(Global(i), Global(1)), true));
     }
@@ -55,8 +69,13 @@ int main()
     assert(!policy.Mappings().back().confirmed);
     assert(policy.ApplyLocal(Global(2), true, 0, 20, 40, 2));
     assert(policy.Mappings().back().confirmed && policy.Mappings().back().validUntil == 42);
+    assert(policy.LocalUsable(Global(2), true, 2));
+    assert(!policy.LocalUsable(Global(2), true, 3)); // cache expires without extending the lease
+    assert(policy.ObserveKernelLocal(Global(2), true, 3));
+    assert(policy.LocalUsable(Global(2), true, 3));
     assert(policy.ApplyLocal(Global(2), true, 0, 0, 0, 3));
     assert(!accept(Echo(Global(2), Global(1)), true, 3));
+    assert(!policy.LocalUsable(Global(2), true, 3));
     auto rs = Packet(133, Lla(2), Group(2), 8); Checksum(rs);
     assert(Policy::AddLayer2Option(rs, terminalId) && rs.size() == 56);
     assert(accept(rs, true));

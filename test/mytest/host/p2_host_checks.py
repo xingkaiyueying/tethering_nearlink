@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
     for source in [*profile.glob('src/*.[ch]'), profile / 'interface/iposl_profile.h',
                    channel / 'nearlink_ipshare_channel.cpp', channel / 'nearlink_ipshare_channel.h',
                    channel / 'nearlink_ipshare_tun.h', here.parent / 'sleip_probe_packets.h',
-                   channel / 'nearlink_ipshare_ipv6.h',
+                   channel / 'nearlink_ipshare_ipv6.h', channel / 'nearlink_ipshare_ipv6.cpp',
                    repo / 'services/stack/src/cp/bsl/sle/qosm/interface/qosm_trans_channel.h',
                    repo / 'ipc_parcel/parcel/nearlink_ipshare_status.h',
                    repo / 'ipc_parcel/parcel/nearlink_ipshare_status.cpp',
@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
             for name in ('nearlink_ipshare_service.cpp', 'nearlink_ipshare_service.h'):
                 shutil.copyfile(channel / name, out / name)
         exe = out / (source.stem + '.exe')
-        subprocess.run([a.cxx, '-std=c++17', '-pthread', '-I'+str(out), str(source), '-o', str(exe)], check=True)
+        subprocess.run([a.cxx, '-std=c++17', '-pthread', '-I'+str(out), str(source), str(out/'nearlink_ipshare_ipv6.cpp'), '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True)
         print(source.stem + '=PASS', flush=True)
 
