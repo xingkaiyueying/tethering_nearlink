@@ -226,12 +226,26 @@ int32_t NearlinkIpShareChannel::UpdateValidatedAddress(const NearlinkIpShareAddr
     }
     auto now =
         std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto previous = std::find_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(), [&](const auto &mapping) {
+        return mapping.address == binary && mapping.terminal == !gateway_;
+    });
+    bool existed = previous != ipv6_.Mappings().end();
+    bool wasConfirmed = existed && previous->confirmed;
+    bool wasConflict = existed && previous->conflict;
     auto next = ipv6_;
     if (!next.ApplyLocal(binary, !gateway_, address.flags, address.preferredLifetime, address.validLifetime, now)) {
         return -1;
     }
     ipv6_ = std::move(next);
     addressSequence_ = address.sequence;
+    auto current = std::find_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(), [&](const auto &mapping) {
+        return mapping.address == binary && mapping.terminal == !gateway_;
+    });
+    bool present = current != ipv6_.Mappings().end();
+    if (existed == present && (!present ||
+        (wasConfirmed == current->confirmed && wasConflict == current->conflict))) {
+        return 0;
+    }
     size_t confirmed = 0;
     size_t terminalConfirmed = 0;
     size_t conflicts = 0;

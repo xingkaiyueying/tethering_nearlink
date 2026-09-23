@@ -180,7 +180,7 @@ int32_t NearlinkIpShareClient::GetStatus(NearlinkIpShareStatus &status) const
     if (ret != NL_NO_ERROR) {
         HILOGE("[IpShare][Client] status query failed ret=%{public}d", ret);
     } else {
-        HILOGI("[IpShare][Client] status query ret=0 role=%{public}d state=%{public}d error=%{public}d",
+        HILOGD("[IpShare][Client] status query ret=0 role=%{public}d state=%{public}d error=%{public}d",
             static_cast<int32_t>(status.role), static_cast<int32_t>(status.state), status.errorCode);
     }
     return ret;
