@@ -42,6 +42,23 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
         if source.stem == 'service_test':
             for name in ('nearlink_ipshare_service.cpp', 'nearlink_ipshare_service.h'):
                 shutil.copyfile(channel / name, out / name)
+            setup_before = os.environ.get('P3_PEER_SETUP_BEFORE_REF')
+            if setup_before:
+                signature = 'int32_t NearlinkIpShareService::PrepareMode('
+                def body(text):
+                    start = text.index(signature)
+                    end = text.index('{', start) + 1
+                    depth = 1
+                    while depth:
+                        depth += (text[end] == '{') - (text[end] == '}')
+                        end += 1
+                    return text[start:end]
+                path = 'services/service/src/ipshare/nearlink_ipshare_service.cpp'
+                old = subprocess.check_output(['git', '-c', f'safe.directory={repo.as_posix()}',
+                    '-C', str(repo), 'show', setup_before + ':' + path]).decode('utf-8')
+                current = (out / 'nearlink_ipshare_service.cpp').read_text(encoding='utf-8')
+                (out / 'nearlink_ipshare_service.cpp').write_text(current.replace(body(current), body(old)),
+                    encoding='utf-8')
         exe = out / (source.stem + '.exe')
         subprocess.run([a.cxx, '-std=c++17', '-pthread', '-I'+str(out), str(source), str(out/'nearlink_ipshare_ipv6.cpp'), '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True)

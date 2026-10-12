@@ -16,6 +16,7 @@
 #define NEARLINK_IPSHARE_SERVICE_H
 
 #include <array>
+#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <vector>
@@ -67,6 +68,9 @@ private:
     void HandleChannelState(bool established, int32_t error);
     void HandleGatewayPeerChannel(const uint8_t peer[6], uint64_t epoch, bool established, int32_t error);
     void ReleaseGatewayPeer(const uint8_t peer[6], uint64_t epoch);
+    void CheckGatewayPeerSetupTimeout(const std::array<uint8_t, 6> &peer, uint64_t epoch, uint64_t generation);
+    void ScheduleGatewayPeerSetupTimeout(const std::array<uint8_t, 6> &peer, uint64_t epoch,
+        uint64_t generation, uint64_t delayMs);
     int32_t ValidateSecurePeer(const std::string &peerAddress, uint8_t peer[6], uint8_t &addressType) const;
     int32_t BeginRole(NearlinkIpShareRole role, const std::string &peerAddress,
         const uint8_t peer[6], uint8_t addressType, int32_t mode, uint64_t &generation);
@@ -86,6 +90,7 @@ private:
         bool configured{false};
         bool active{false};
         bool releasing{false};
+        std::chrono::steady_clock::time_point setupDeadline{};
         std::shared_ptr<NearlinkIpShareChannel> channel;
     };
     GatewayPeer *FindGatewayPeerLocked(const uint8_t peer[6]) const;

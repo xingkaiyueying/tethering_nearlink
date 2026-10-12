@@ -47,6 +47,7 @@ public:
                     const uint8_t *clientKey = nullptr, const uint8_t *localLayer2 = nullptr, uint64_t generation = 0);
     int32_t PrepareMode(uint8_t mode);
     bool IsDrained();
+    bool IsEstablished();
     int32_t UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address);
     int32_t ResetBinding(uint64_t generation);
     int32_t EnableMode(uint8_t mode);
@@ -56,6 +57,7 @@ public:
 
     static bool IsIpSharePort(uint16_t port);
     static bool IsAcceptingPort(const SLE_Addr_S *addr, uint16_t port);
+    static void CancelPassiveReservation(const SLE_Addr_S *addr, uint16_t port);
     static bool HandleChannelStatus(const QOSM_TransChannelRspParams_S *params);
     static int OnIpv4Received(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
     NearlinkIpShareChannel() = default;
@@ -66,6 +68,7 @@ public:
 private:
     bool ConsumeStatus(const QOSM_TransChannelRspParams_S *params);
     bool CanAccept(const SLE_Addr_S *addr, uint16_t port);
+    void CancelPassive(const SLE_Addr_S *addr, uint16_t port);
     bool OwnsChannel(uint16_t lcid, uint8_t tcid);
     int Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
     int32_t Send(const uint8_t *data, uint16_t length);
@@ -123,6 +126,7 @@ private:
     bool releasing_{false};
     bool initialized_{false};
     bool channelPending_{false};
+    bool passivePending_{false};
     bool channelEstablished_{false};
     bool dhcpBound_{false};
 };

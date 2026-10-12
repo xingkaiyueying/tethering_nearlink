@@ -37,6 +37,7 @@ constexpr int32_t IP_SHARE_PROFILE_FAILED = -4;
 constexpr int32_t IP_SHARE_RESOURCE_FAILED = -5;
 constexpr auto SUPPORT_WAIT = std::chrono::seconds(30);
 constexpr int32_t IP_SHARE_MAX_CAPACITY_LIMIT = 32;
+constexpr auto GATEWAY_PEER_SETUP_TIMEOUT = std::chrono::seconds(30);
 } // namespace
 
 int32_t NearlinkIpShareService::GetSupportedMaxTerminals() const
@@ -866,6 +867,7 @@ void NearlinkIpShareService::HandleGatewayPeerChannel(const uint8_t peer[6], uin
         else if (established && entry->releasing) return;
         else if (established) {
             entry->active = true;
+            entry->setupDeadline = {};
             status_.state = NearlinkIpShareState::CHANNEL_READY;
             RefreshPeerLinksLocked();
             StampLocked();
@@ -896,6 +898,48 @@ void NearlinkIpShareService::OnPeerDisconnected(const std::string &peerAddress)
     });
 }
 
+void NearlinkIpShareService::ScheduleGatewayPeerSetupTimeout(const std::array<uint8_t, 6> &peer,
+    uint64_t epoch, uint64_t generation, uint64_t delayMs)
+{
+    // ThreadUtil replaces delayed tasks sharing a name; every reservation needs its own timer.
+    const std::string name = "ipshare_peer_setup_" + std::to_string(generation) + "_" + std::to_string(epoch);
+    ThreadUtil::GetInstance().PostTask(THREAD_ID_IPSHARE, [this, peer, epoch, generation]() {
+        CheckGatewayPeerSetupTimeout(peer, epoch, generation);
+    }, delayMs, name);
+}
+
+void NearlinkIpShareService::CheckGatewayPeerSetupTimeout(const std::array<uint8_t, 6> &peer,
+    uint64_t epoch, uint64_t generation)
+{
+    uint64_t remainingMs = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto *entry = FindGatewayPeerLocked(peer.data());
+        if (!initialized_ || !gatewayAny_ || status_.role != NearlinkIpShareRole::GATEWAY ||
+            status_.generation != generation || status_.state == NearlinkIpShareState::STOPPING ||
+            entry == nullptr || entry->epoch != epoch || entry->active || entry->releasing ||
+            entry->setupDeadline == std::chrono::steady_clock::time_point{}) return;
+        // Channel completion can already be queued behind this timer on the service worker.
+        if (entry->channel->IsEstablished()) return;
+        auto now = std::chrono::steady_clock::now();
+        if (now < entry->setupDeadline) {
+            remainingMs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(entry->setupDeadline - now).count()) + 1;
+        } else {
+            // Commit the timeout decision before a late channel completion can become active.
+            entry->releasing = true;
+            entry->setupDeadline = {};
+        }
+    }
+    if (remainingMs != 0) {
+        ScheduleGatewayPeerSetupTimeout(peer, epoch, generation, remainingMs);
+        return;
+    }
+    HILOGW("[IpShare][Service] peer setup timeout epoch=%{public}llu", static_cast<unsigned long long>(epoch));
+    // Retain the seat until channel drain, Ext L3 cleanup and checked IPoSL release complete.
+    ReleaseGatewayPeer(peer.data(), epoch);
+}
+
 void NearlinkIpShareService::ReleaseGatewayPeer(const uint8_t peer[6], uint64_t epoch)
 {
     std::shared_ptr<NearlinkIpShareChannel> channel;
@@ -905,10 +949,11 @@ void NearlinkIpShareService::ReleaseGatewayPeer(const uint8_t peer[6], uint64_t 
         auto *entry = FindGatewayPeerLocked(peer);
         if (entry == nullptr || (epoch != 0 && entry->epoch != epoch)) return;
         entry->releasing = true; // Occupies its seat until QoSM and TUN have drained.
+        entry->setupDeadline = {};
         channel = entry->channel;
     }
     channel->Close(); // TUN reader joins outside the service lock.
-    if (!channel->IsDrained()) return;
+    // Publish releasing even while a real late channel is pending; retirement still checks drain.
     NearlinkIpShareStatus snapshot;
     sptr<INearlinkIpShareObserver> observer;
     bool notify = false;
@@ -1064,12 +1109,15 @@ int32_t NearlinkIpShareService::PrepareMode(const uint8_t peer[6], uint8_t mode,
             return -1;
         }
         entry->selectedMode = mode;
+        entry->setupDeadline = std::chrono::steady_clock::now() + GATEWAY_PEER_SETUP_TIMEOUT;
         service.gatewayPeers_[slot] = std::move(entry);
         service.StampLocked();
         auto snapshot = service.status_;
         auto observer = service.observer_;
         lock.unlock();
         service.NotifyStatus(snapshot, observer);
+        service.ScheduleGatewayPeerSetupTimeout(address, epoch, generation,
+            std::chrono::duration_cast<std::chrono::milliseconds>(GATEWAY_PEER_SETUP_TIMEOUT).count());
         return 0;
     }
     std::lock_guard<std::mutex> lock(service.mutex_);

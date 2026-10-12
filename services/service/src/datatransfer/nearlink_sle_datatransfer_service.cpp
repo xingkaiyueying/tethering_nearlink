@@ -1221,6 +1221,11 @@ bool SleDataTransferService::CheckIpSharePeerCallback(const SLE_Addr_S *addr, ui
     return NearlinkIpShareChannel::IsAcceptingPort(addr, srcPort);
 }
 
+void SleDataTransferService::CancelIpSharePeerCallback(const SLE_Addr_S *addr, uint16_t srcPort)
+{
+    NearlinkIpShareChannel::CancelPassiveReservation(addr, srcPort);
+}
+
 bool SleDataTransferService::CheckChannelParamCallback(uint16_t srcPort)
 {
     if (NearlinkIpShareChannel::IsIpSharePort(srcPort)) {
@@ -1367,7 +1372,8 @@ int SleDataTransferService::RegisterSleDataTransferCallbackToStack()
     ret = QOSM_TransChannelCbksRegister(&transChannelCbks);
     HILOGI("DT stack channel cb ret=0x%{public}x", ret);
     if (ret == 0) {
-        ret = QOSM_RegisterIpSharePeerCheck(&SleDataTransferService::CheckIpSharePeerCallback);
+        ret = QOSM_RegisterIpSharePeerCallbacks(&SleDataTransferService::CheckIpSharePeerCallback,
+            &SleDataTransferService::CancelIpSharePeerCallback);
     }
     return ret;
 }

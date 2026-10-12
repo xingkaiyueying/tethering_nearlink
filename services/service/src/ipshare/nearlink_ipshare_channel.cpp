@@ -182,6 +182,12 @@ bool NearlinkIpShareChannel::IsDrained()
     return !active_ && !channelPending_ && !channelEstablished_ && !releasing_ && mode_ == 0 && !tun_.IsOpen();
 }
 
+bool NearlinkIpShareChannel::IsEstablished()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return active_ && enabled_ && channelEstablished_ && !releasing_;
+}
+
 int32_t NearlinkIpShareChannel::ResetBinding(uint64_t generation)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -486,8 +492,38 @@ bool NearlinkIpShareChannel::CanAccept(const SLE_Addr_S *addr, uint16_t port)
                   !channelEstablished_ && tun_.IsOpen() && memcmp(peer_, emptyPeer, sizeof(peer_)) != 0;
     accept = accept && addr != nullptr && addr->type == addressType_ &&
              memcmp(addr->addr, peer_, sizeof(peer_)) == 0;
-    if (accept) channelPending_ = true;
+    if (accept) {
+        channelPending_ = true;
+        passivePending_ = true;
+    }
     return accept;
+}
+
+void NearlinkIpShareChannel::CancelPassiveReservation(const SLE_Addr_S *addr, uint16_t port)
+{
+    if (addr == nullptr || !IsIpSharePort(port)) return;
+    std::vector<std::shared_ptr<NearlinkIpShareChannel>> channels;
+    {
+        std::lock_guard<std::mutex> lock(g_channelRegistryMutex);
+        channels = g_channelRegistry;
+    }
+    for (const auto &channel : channels) channel->CancelPassive(addr, port);
+}
+
+void NearlinkIpShareChannel::CancelPassive(const SLE_Addr_S *addr, uint16_t port)
+{
+    StateCallback callback;
+    uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!IsIpSharePort(port) || addr->type != addressType_ || memcmp(addr->addr, peer_, sizeof(peer_)) != 0 ||
+            !passivePending_ || !channelPending_ || channelEstablished_ || releasing_) return;
+        channelPending_ = false;
+        passivePending_ = false;
+        if (!active_) callback = callback_;
+        generation = generation_;
+    }
+    if (callback) callback(false, 0, generation);
 }
 
 bool NearlinkIpShareChannel::HandleChannelStatus(const QOSM_TransChannelRspParams_S *params)
@@ -534,6 +570,7 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
                 destroy = true;
             } else if (params->mtu < IPOSL_MTU) {
                 channelPending_ = false;
+                passivePending_ = false;
                 lcid_ = params->lcid;
                 tcid_ = params->tcid;
                 releasing_ = true;
@@ -546,6 +583,7 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
                 }
             } else {
                 channelPending_ = false;
+                passivePending_ = false;
                 lcid_ = params->lcid;
                 tcid_ = params->tcid;
                 if (!initialized_ || !active_ || releasing_) {
@@ -562,6 +600,7 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
         } else if (params->status == QOSM_TRANS_CHANNEL_ESTABLISH_FAIL) {
             if (!channelPending_ && !active_) return true;
             channelPending_ = false;
+            passivePending_ = false;
             if (active_) {
                 callback = callback_;
                 error = -1;

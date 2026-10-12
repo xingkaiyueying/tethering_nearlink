@@ -124,6 +124,65 @@ int main()
     assert(status.state==NearlinkIpShareState::DISCOVERING); // queued old stop cannot kill new generation
     s.Stop(); DrainTasks(); s.Shutdown();
     assert(s.Initialize()==0);
+    // Setup deadlines release only the expired epoch, with no ACB disconnect required.
+    uint8_t setupOther[6]={2,1,2,3,4,6};
+    for (bool enabled : {false, true}) {
+        assert(s.StartGatewayAny(1,1)==0);DrainTasks();s.GetStatus(status);
+        auto serverEpoch=status.generation;
+        assert(profileCallbacks.prepareMode(peer,1,serverEpoch)==0);
+        auto epoch=s.gatewayPeers_[0]->epoch;
+        assert(!delayedTasks.empty());auto expiry=delayedTasks.back();delayedTasks.pop_back();
+        profileCallbacks.onConfigured(peer,enabled,0,1,serverEpoch);DrainTasks();
+        expiry(); // An early timer cannot expire a peer; it schedules the remaining interval.
+        assert(!s.gatewayPeers_[0]->releasing && !delayedTasks.empty());
+        s.gatewayPeers_[0]->setupDeadline=std::chrono::steady_clock::now()-std::chrono::milliseconds(1);
+        expiry();DrainTasks();s.GetStatus(status);
+        assert(status.peerLinks[0].releasing && !status.peerLinks[0].active);
+        assert(s.gatewayPeers_[0]->channel->IsDrained());
+        assert(profileCallbacks.prepareMode(setupOther,1,serverEpoch)!=0); // waits for checked L3/seat release
+        assert(s.CompleteGatewayPeerRelease(epoch)==0);DrainTasks();
+        assert(profileCallbacks.prepareMode(peer,1,serverEpoch)==0);
+        auto replacement=s.gatewayPeers_[0]->epoch;assert(replacement!=epoch);
+        expiry();DrainTasks();assert(s.gatewayPeers_[0]->epoch==replacement && !s.gatewayPeers_[0]->releasing);
+        assert(s.Stop()==0);DrainTasks();
+        assert(s.StartGatewayAny(1,1)==0);DrainTasks();s.GetStatus(status);
+        assert(profileCallbacks.prepareMode(peer,1,status.generation)==0);
+        expiry();DrainTasks();assert(!s.gatewayPeers_[0]->releasing); // old gateway generation
+        assert(s.Stop()==0);DrainTasks();delayedTasks.clear();
+    }
+    // An already established channel is exempt even if its service callback is still queued.
+    assert(s.StartGatewayAny(1,2)==0);DrainTasks();s.GetStatus(status);
+    auto setupGeneration=status.generation;
+    assert(profileCallbacks.prepareMode(peer,1,setupGeneration)==0);
+    assert(profileCallbacks.prepareMode(setupOther,1,setupGeneration)==0);
+    assert(delayedTasks.size()==2 && delayedTasks[0].name!=delayedTasks[1].name);
+    auto activeExpiry=delayedTasks[0], pendingExpiry=delayedTasks[1];
+    auto activePeer=s.gatewayPeers_[0]->channel;
+    profileCallbacks.onConfigured(peer,true,0,1,setupGeneration);DrainTasks();
+    profileCallbacks.onConfigured(setupOther,true,0,1,setupGeneration);DrainTasks();
+    auto pendingPeer=s.gatewayPeers_[1]->channel;
+    SLE_Addr_S pendingAddress{};memcpy(pendingAddress.addr,setupOther,6);
+    assert(c.IsAcceptingPort(&pendingAddress,c.IP_SHARE_PORT));
+    auto ready=rsp;ready.status=QOSM_TRANS_CHANNEL_ESTABLISHED;
+    activePeer->HandleChannelStatus(&ready); // Leave the service completion task queued.
+    s.gatewayPeers_[0]->setupDeadline=std::chrono::steady_clock::now()-std::chrono::milliseconds(1);
+    activeExpiry();
+    assert(!s.gatewayPeers_[0]->releasing);DrainTasks();assert(s.gatewayPeers_[0]->active);
+    auto expiredEpoch=s.gatewayPeers_[1]->epoch;
+    s.gatewayPeers_[1]->setupDeadline=std::chrono::steady_clock::now()-std::chrono::milliseconds(1);
+    pendingExpiry();DrainTasks();
+    assert(s.gatewayPeers_[1]->releasing && s.gatewayPeers_[0]->active && activePeer->IsEstablished());
+    assert(!pendingPeer->IsDrained() && s.CompleteGatewayPeerRelease(expiredEpoch)!=0);
+    auto late=ready;memcpy(late.addr.addr,setupOther,6);late.lcid=16;late.tcid=5;
+    c.HandleChannelStatus(&late);DrainTasks();
+    assert(pendingPeer->releasing_ && s.CompleteGatewayPeerRelease(expiredEpoch)!=0);
+    late.status=QOSM_TRANS_CHANNEL_RELEASED;c.HandleChannelStatus(&late);DrainTasks();
+    assert(s.CompleteGatewayPeerRelease(expiredEpoch)==0);DrainTasks();
+    assert(s.gatewayPeers_[1]==nullptr && activePeer->IsEstablished());
+    assert(s.Stop()==0);DrainTasks();ready.status=QOSM_TRANS_CHANNEL_RELEASED;
+    c.HandleChannelStatus(&ready);DrainTasks();s.GetStatus(status);assert(status.state==NearlinkIpShareState::IDLE);
+    delayedTasks.clear();
+    puts("gateway setup: monotonic deadline, configure/enable interruption, drain/L3 ownership, late channel, active peer and stale epoch/generation PASS");
     for (int oldSetting : {0, 2, 7, 33}) {
         OHOS::system::mockMaxTerminals=oldSetting;
         assert(s.GetSupportedMaxTerminals()==32); // retired system parameter does not limit APP input

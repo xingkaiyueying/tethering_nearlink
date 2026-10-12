@@ -114,6 +114,28 @@ static SDF_Map *g_transChannelMap = NULL;  // key: lcid, value: list of QOSM_Tra
 
 static QOSM_TransChannelCbks_S g_transChannelCbks = { 0 };
 static QOSM_IpSharePeerCheck g_ipSharePeerCheck;
+static QOSM_IpSharePeerCancel g_ipSharePeerCancel;
+
+typedef struct {
+    QOSM_IpSharePeerCheck check;
+    QOSM_IpSharePeerCancel cancel;
+} QOSM_IpSharePeerCallbacks;
+
+static void QOSM_RegisterIpSharePeerCallbacksProc(void *arg)
+{
+    QOSM_IpSharePeerCallbacks *callbacks = (QOSM_IpSharePeerCallbacks *)arg;
+    g_ipSharePeerCheck = callbacks->check;
+    g_ipSharePeerCancel = callbacks->cancel;
+}
+
+uint32_t QOSM_RegisterIpSharePeerCallbacks(QOSM_IpSharePeerCheck check, QOSM_IpSharePeerCancel cancel)
+{
+    QOSM_IpSharePeerCallbacks *copy = (QOSM_IpSharePeerCallbacks *)SDF_MemAlloc(sizeof(*copy));
+    QOSM_CHECK_RETURN_RET(copy != NULL, QOSM_MALLOC_ERR, "malloc failed.");
+    *copy = (QOSM_IpSharePeerCallbacks){check, cancel};
+    uint32_t ret = CP_PostTask(QOSM_RegisterIpSharePeerCallbacksProc, copy, SDF_MemFree);
+    return ret == CP_OK ? QOSM_SUCCESS : QOSM_POST_TASK_ERR;
+}
 
 static void QOSM_RegisterIpSharePeerCheckProc(void *arg)
 {
@@ -807,9 +829,21 @@ static bool QOSM_CheckIpSharePeer(uint16_t lcid, uint16_t srcPort, uint16_t dstP
         g_ipSharePeerCheck(&link.addr, srcPort);
 }
 
+static void QOSM_CancelIpSharePeer(uint16_t lcid, uint16_t srcPort, uint16_t dstPort)
+{
+    const uint16_t ipSharePort = 30200;
+    CM_LogicLink_S link = {0};
+    if (srcPort == ipSharePort && dstPort == ipSharePort && g_ipSharePeerCancel != NULL &&
+        CM_GetLogicLinkByLcid(lcid, &link) == CM_SUCCESS) {
+        // Runs synchronously on CP before this failed request can be replaced.
+        g_ipSharePeerCancel(&link.addr, srcPort);
+    }
+}
+
 static uint32_t QOSM_DynTransChanCbksReg(void)
 {
     CM_DynTransChannStateMgrRegPeerCheck(QOSM_CheckIpSharePeer);
+    CM_DynTransChannStateMgrRegPeerCancel(QOSM_CancelIpSharePeer);
     // 注册CM传输通道回调
     CM_DynTransChannelCbks_S cbks = {
         .establishRspCbk = QOSM_TransChannelEstablishRspCbk,
@@ -824,7 +858,9 @@ static uint32_t QOSM_DynTransChanCbksReg(void)
 static void QOSM_DynTransChanCbksUnreg(void)
 {
     CM_DynTransChannStateMgrRegPeerCheck(NULL);
+    CM_DynTransChannStateMgrRegPeerCancel(NULL);
     g_ipSharePeerCheck = NULL;
+    g_ipSharePeerCancel = NULL;
     // 取消注册CM传输通道回调
     CM_UnRegDynTransChannelCbks();
 }

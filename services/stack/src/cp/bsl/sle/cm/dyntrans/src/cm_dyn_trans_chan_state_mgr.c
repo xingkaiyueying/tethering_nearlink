@@ -24,10 +24,23 @@
 
 static CM_DynTransChannelCbks_S g_channelCbks = { 0 };
 static CM_DynTransPeerCheck g_peerCheck;
+static CM_DynTransPeerCancel g_peerCancel;
 
 void CM_DynTransChannStateMgrRegPeerCheck(CM_DynTransPeerCheck callback)
 {
     g_peerCheck = callback;
+}
+
+void CM_DynTransChannStateMgrRegPeerCancel(CM_DynTransPeerCancel callback)
+{
+    g_peerCancel = callback;
+}
+
+static void CM_DynTransCancelPeerReservation(const CM_DynTransChanParam_S *param)
+{
+    if (g_peerCancel != NULL) {
+        g_peerCancel(param->lcid, param->srcPort, param->dstPort);
+    }
 }
 
 static uint32_t CM_DynTransChanActiveEstablishingReqHandler(uint8_t curState, const CM_DynTransChanParam_S *param,
@@ -506,7 +519,11 @@ static uint32_t CM_DynTransChanPassiveEstablishedReqHandler(uint8_t curState, co
 
     // 1. allocate local tcid
     uint8_t localTcid = CM_DynTcidAllocate(param->lcid, param->expectedTransportMode);
-    CM_CHECK_RETURN_RET((localTcid != CM_TRANS_INVALID_TCID), CM_FAIL, "get avaliable localTcid failed");
+    if (localTcid == CM_TRANS_INVALID_TCID) {
+        CM_LOGE("get avaliable localTcid failed");
+        CM_DynTransCancelPeerReservation(param);
+        return CM_FAIL;
+    }
     // 2. active dyn trans channel node
     CM_DynTransChanParam_S activeParam = { 0 };
     (void)memcpy_s(&activeParam, sizeof(CM_DynTransChanParam_S), param, sizeof(CM_DynTransChanParam_S));
@@ -516,6 +533,7 @@ static uint32_t CM_DynTransChanPassiveEstablishedReqHandler(uint8_t curState, co
     if (node == NULL) {
         CM_LOGE("activate dyn trans channel failed, lcid:0x%04x", param->lcid);
         (void)CM_DynTcidRelease(param->lcid, localTcid, param->expectedTransportMode);
+        CM_DynTransCancelPeerReservation(param);
         return CM_FAIL;
     }
     // 3. send establish rsp signaling
@@ -528,6 +546,7 @@ static uint32_t CM_DynTransChanPassiveEstablishedReqHandler(uint8_t curState, co
         CM_LOGE("signaling establish rsp sent failed failed, lcid:0x%04x, reqId:0x%02x", param->lcid, param->reqId);
         CM_ReleaseDynamicTransChannelByLocalTcid(node);
         (void)CM_DynTcidRelease(param->lcid, localTcid, param->expectedTransportMode);
+        CM_DynTransCancelPeerReservation(param);
         return CM_FAIL;
     }
     // 4. status indication cbk

@@ -126,6 +126,8 @@ typedef bool (*QOSM_TransChannelEstablishedCheckCbk)(uint16_t srcPort);
 // Separate IPShare registration, without extending the legacy callback structure.
 typedef bool (*QOSM_IpSharePeerCheck)(const SLE_Addr_S *addr, uint16_t srcPort);
 uint32_t QOSM_RegisterIpSharePeerCheck(QOSM_IpSharePeerCheck callback);
+typedef void (*QOSM_IpSharePeerCancel)(const SLE_Addr_S *addr, uint16_t srcPort);
+uint32_t QOSM_RegisterIpSharePeerCallbacks(QOSM_IpSharePeerCheck check, QOSM_IpSharePeerCancel cancel);
 
 typedef struct {
     QOSM_TransChannelStatusCbk statusCbk;
