@@ -16,8 +16,6 @@
 
 #include <string.h>
 #include <stdatomic.h>
-#include <pthread.h>
-#include <time.h>
 #include "cp_worker.h"
 #include "sdf_mem.h"
 #include "sdf_buff.h"
@@ -29,8 +27,6 @@ static IposlProfileCallbacks g_callbacks;
 static atomic_bool g_initialized;
 static bool g_callbacksInstalled;
 static atomic_uint_fast64_t g_sendGeneration;
-static void IposlCancelAllSends(void);
-static bool IposlAllSendsDrained(void);
 
 const IposlProfileCallbacks *IposlGetCallbacks(void)
 {
@@ -45,7 +41,6 @@ int32_t IposlProfileInit(const IposlProfileCallbacks *callbacks)
         return IPOSL_ERR_INVALID_PARAM;
     }
     NLSTK_LOG_INFO("[IpShare][IPoSL] profile init started");
-    if (!IposlAllSendsDrained()) return IPOSL_ERR_INVALID_STATE;
     if (!IposlCodecVerifyGoldenVectors()) {
         NLSTK_LOG_ERROR("[IpShare][IPoSL] profile init failed: codec golden vectors");
         return IPOSL_ERR_INVALID_STATE;
@@ -57,8 +52,7 @@ int32_t IposlProfileInit(const IposlProfileCallbacks *callbacks)
         g_callbacks.onConfigured != callbacks->onConfigured || g_callbacks.prepareMode != callbacks->prepareMode ||
         g_callbacks.isSecure != callbacks->isSecure || g_callbacks.canSend != callbacks->canSend ||
         g_callbacks.onPeerCapabilities != callbacks->onPeerCapabilities ||
-        g_callbacks.isSecureAddress != callbacks->isSecureAddress ||
-        g_callbacks.onSendComplete != callbacks->onSendComplete) {
+        g_callbacks.isSecureAddress != callbacks->isSecureAddress) {
         return IPOSL_ERR_INVALID_STATE;
     }
     int32_t ret = IposlServerInitialize();
@@ -77,7 +71,6 @@ void IposlProfileDeinit(void)
     NLSTK_LOG_INFO("[IpShare][IPoSL] profile deinit started");
     g_initialized = false;
     atomic_store(&g_sendGeneration, 0);
-    IposlCancelAllSends();
     IposlClientStop();
     IposlServerDeinit();
     NLSTK_LOG_INFO("[IpShare][IPoSL] profile deinit completed");
@@ -120,14 +113,13 @@ int32_t IposlProfileStartServer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t
 void IposlProfileStopServer(void)
 {
     atomic_store(&g_sendGeneration, 0);
-    IposlCancelAllSends();
     IposlServerStop();
     NLSTK_LOG_INFO("[IpShare][IPoSL] server stopped");
 }
 
 bool IposlProfileServerIsDrained(void)
 {
-    return IposlServerIsDrained() && IposlAllSendsDrained();
+    return IposlServerIsDrained();
 }
 
 int32_t IposlProfileProbePeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType, uint8_t mode, uint64_t generation)
@@ -165,7 +157,6 @@ int32_t IposlProfileStartTerminal(const uint8_t gateway[IPOSL_LAYER2_ID_LEN], ui
 void IposlProfileStopClient(void)
 {
     atomic_store(&g_sendGeneration, 0);
-    IposlCancelAllSends();
     IposlClientStop();
     NLSTK_LOG_INFO("[IpShare][IPoSL] client stopped");
 }
@@ -180,198 +171,47 @@ uint8_t IposlProfileDataProtocolIndicator(void)
     return DTAP_PI_IPV4;
 }
 
-/* IPoSL-owned bounded queues. All DTAP access stays on CP; no shared scheduler changes. */
-#define IPOSL_SEND_CHANNELS 32u
-#define IPOSL_SEND_LIMIT 64u
-#define IPOSL_SEND_HIGH 48u
-#define IPOSL_SEND_LOW 16u
-#define IPOSL_SEND_BATCH 8u
-typedef struct IposlSendPacket {
-    struct IposlSendPacket *next;
-    SDF_Buff_S *buff;
+/* The caller and CP task each own one reference, including post failure/timeout. */
+typedef struct {
+    atomic_int refs;
+    int32_t result;
     uint16_t lcid;
+    uint16_t length;
     uint8_t tcid;
     uint8_t pi;
     uint64_t generation;
-} IposlSendPacket;
-typedef struct {
-    IposlSendPacket *head;
-    IposlSendPacket *tail;
-    uint16_t lcid;
-    uint8_t tcid;
-    uint64_t generation;
-    uint32_t count; /* Includes the packet being processed outside the lock. */
-    bool used;
-    bool scheduled;
-    bool cancelled;
-    bool paused;
-} IposlSendQueue;
-static IposlSendQueue g_sendQueues[IPOSL_SEND_CHANNELS];
-static pthread_mutex_t g_sendMutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_sendCapacity = PTHREAD_COND_INITIALIZER;
+    uint8_t payload[];
+} IposlSendTask;
 
-static IposlSendQueue *IposlFindSendQueue(uint16_t lcid, uint8_t tcid, uint64_t generation)
+static void IposlSendRelease(void *arg)
 {
-    for (size_t i = 0; i < IPOSL_SEND_CHANNELS; ++i) {
-        IposlSendQueue *q = &g_sendQueues[i];
-        if (q->used && q->lcid == lcid && q->tcid == tcid && q->generation == generation) return q;
-    }
-    return NULL;
-}
-
-static void IposlFinishPacket(IposlSendPacket *packet, int32_t result)
-{
-    const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
-    if (callbacks != NULL && callbacks->onSendComplete != NULL) {
-        callbacks->onSendComplete(packet->lcid, packet->tcid, packet->pi, packet->generation, result);
-    }
-    if (packet->buff != NULL) SDF_BuffFree(packet->buff);
-    SDF_MemFree(packet);
-}
-
-static void IposlFreeUnadmitted(IposlSendPacket *packet)
-{
-    if (packet->buff != NULL) SDF_BuffFree(packet->buff);
-    SDF_MemFree(packet);
-}
-
-static void IposlDropPackets(IposlSendPacket *packet)
-{
-    while (packet != NULL) {
-        IposlSendPacket *next = packet->next;
-        IposlFinishPacket(packet, IPOSL_ERR_INVALID_STATE);
-        packet = next;
+    IposlSendTask *task = arg;
+    if (atomic_fetch_sub(&task->refs, 1) == 1) {
+        SDF_MemFree(task);
     }
 }
 
 static void IposlSendOnCp(void *arg)
 {
-    IposlSendQueue *q = arg;
-    struct timespec started;
-    bool timed = clock_gettime(CLOCK_MONOTONIC, &started) == 0;
-    for (unsigned n = 0; n < IPOSL_SEND_BATCH; ++n) {
-        pthread_mutex_lock(&g_sendMutex);
-        IposlSendPacket *packet = q->head;
-        if (packet == NULL) {
-            pthread_mutex_unlock(&g_sendMutex);
-            break;
-        }
-        q->head = packet->next;
-        if (q->head == NULL) q->tail = NULL;
-        bool cancelled = q->cancelled;
-        pthread_mutex_unlock(&g_sendMutex);
-        int32_t result = IPOSL_ERR_INVALID_STATE;
-        const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
-        if (!cancelled && callbacks != NULL &&
-            callbacks->canSend(packet->lcid, packet->tcid, packet->pi, packet->generation)) {
-            pthread_mutex_lock(&g_sendMutex);
-            cancelled = q->cancelled;
-            pthread_mutex_unlock(&g_sendMutex);
-            if (!cancelled) {
-                DTAP_Data_S data = {.pi = packet->pi, .lcid = packet->lcid,
-                    .tcid = packet->tcid, .buff = packet->buff};
-                result = (int32_t)DTAP_DataSend(&data);
-                if (result == 0) packet->buff = NULL; /* DTAP owns it after admission. */
-                else NLSTK_LOG_ERROR("[IpShare][TX] CP DTAP send failed ret=%d", result);
-            }
-        }
-        IposlFinishPacket(packet, result);
-        pthread_mutex_lock(&g_sendMutex);
-        --q->count;
-        if (q->count <= IPOSL_SEND_LOW) {
-            q->paused = false;
-            pthread_cond_broadcast(&g_sendCapacity);
-        }
-        pthread_mutex_unlock(&g_sendMutex);
-        struct timespec now;
-        if (timed && clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
-            (now.tv_sec - started.tv_sec) * 1000000000LL + now.tv_nsec - started.tv_nsec >= 2000000LL) break;
+    IposlSendTask *task = arg;
+    const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
+    if (callbacks == NULL || !callbacks->canSend(task->lcid, task->tcid, task->pi, task->generation)) return;
+    SDF_Buff_S *buff = SDF_BuffNewWithReserve(task->length);
+    if (buff == NULL) {
+        return;
     }
-    pthread_mutex_lock(&g_sendMutex);
-    IposlSendPacket *dropped = NULL;
-    if (q->head != NULL && CP_PostTask(IposlSendOnCp, q, NULL) != 0) {
-        dropped = q->head;
-        q->head = q->tail = NULL;
-        q->cancelled = true;
+    uint8_t *payload = SDF_BuffAppend(buff, task->length);
+    if (payload == NULL) {
+        SDF_BuffFree(buff);
+        return;
     }
-    if (q->head == NULL && dropped == NULL) {
-        q->scheduled = false;
-        q->paused = false;
-        if (q->cancelled) q->used = false;
-        pthread_cond_broadcast(&g_sendCapacity);
+    (void)memcpy(payload, task->payload, task->length);
+    DTAP_Data_S packet = {.pi = task->pi, .lcid = task->lcid, .tcid = task->tcid, .buff = buff};
+    task->result = (int32_t)DTAP_DataSend(&packet);
+    if (task->result != 0) {
+        SDF_BuffFree(buff);
+        NLSTK_LOG_ERROR("[IpShare][TX] CP DTAP send failed ret=%d", task->result);
     }
-    pthread_mutex_unlock(&g_sendMutex);
-    IposlDropPackets(dropped);
-    if (dropped != NULL) {
-        pthread_mutex_lock(&g_sendMutex);
-        q->count = 0; q->scheduled = false; q->used = false;
-        pthread_cond_broadcast(&g_sendCapacity);
-        pthread_mutex_unlock(&g_sendMutex);
-    }
-}
-
-static void IposlCancelAllSends(void)
-{
-    pthread_mutex_lock(&g_sendMutex);
-    for (size_t i = 0; i < IPOSL_SEND_CHANNELS; ++i) {
-        g_sendQueues[i].cancelled = true;
-        if (!g_sendQueues[i].scheduled && g_sendQueues[i].count == 0) g_sendQueues[i].used = false;
-    }
-    pthread_cond_broadcast(&g_sendCapacity);
-    pthread_mutex_unlock(&g_sendMutex);
-}
-
-static bool IposlAllSendsDrained(void)
-{
-    bool drained = true;
-    pthread_mutex_lock(&g_sendMutex);
-    for (size_t i = 0; i < IPOSL_SEND_CHANNELS; ++i) {
-        if (g_sendQueues[i].scheduled || g_sendQueues[i].count != 0) drained = false;
-    }
-    pthread_mutex_unlock(&g_sendMutex);
-    return drained;
-}
-
-void IposlProfileCancelSend(uint16_t lcid, uint8_t tcid, uint64_t generation)
-{
-    pthread_mutex_lock(&g_sendMutex);
-    IposlSendQueue *q = IposlFindSendQueue(lcid, tcid, generation);
-    if (q != NULL) {
-        q->cancelled = true;
-        if (!q->scheduled && q->count == 0) q->used = false;
-    }
-    pthread_cond_broadcast(&g_sendCapacity);
-    pthread_mutex_unlock(&g_sendMutex);
-}
-
-bool IposlProfileSendIsDrained(uint16_t lcid, uint8_t tcid, uint64_t generation)
-{
-    pthread_mutex_lock(&g_sendMutex);
-    IposlSendQueue *q = IposlFindSendQueue(lcid, tcid, generation);
-    bool drained = q == NULL || (!q->scheduled && q->count == 0);
-    pthread_mutex_unlock(&g_sendMutex);
-    return drained;
-}
-
-bool IposlProfileWaitSendCapacity(uint16_t lcid, uint8_t tcid, uint64_t generation)
-{
-    pthread_mutex_lock(&g_sendMutex);
-    IposlSendQueue *q = IposlFindSendQueue(lcid, tcid, generation);
-    if (q != NULL && q->count >= IPOSL_SEND_HIGH) q->paused = true;
-    if (q != NULL && q->paused && !q->cancelled && atomic_load(&g_initialized)) {
-        struct timespec deadline;
-        if (clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
-            pthread_mutex_unlock(&g_sendMutex);
-            return false;
-        }
-        deadline.tv_nsec += 100000000L;
-        if (deadline.tv_nsec >= 1000000000L) { ++deadline.tv_sec; deadline.tv_nsec -= 1000000000L; }
-        (void)pthread_cond_timedwait(&g_sendCapacity, &g_sendMutex, &deadline);
-        q = IposlFindSendQueue(lcid, tcid, generation);
-    }
-    bool ready = atomic_load(&g_initialized) && (q == NULL || (!q->cancelled && !q->paused));
-    pthread_mutex_unlock(&g_sendMutex);
-    return ready;
 }
 
 int32_t IposlProfileSendIpv4(uint16_t lcid, uint8_t tcid, const uint8_t *data, uint16_t length)
@@ -382,51 +222,24 @@ int32_t IposlProfileSendIpv4(uint16_t lcid, uint8_t tcid, const uint8_t *data, u
 int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *data,
     uint16_t length, uint64_t generation)
 {
-    if (generation == 0 || !atomic_load(&g_initialized) || !IposlCodecValidatePacket(pi, data, length)) {
+    if (!IposlCodecValidatePacket(pi, data, length)) {
         return IPOSL_ERR_INVALID_PARAM;
     }
-    IposlSendPacket *packet = SDF_MemAlloc(sizeof(*packet));
-    if (packet == NULL) return IPOSL_ERR_INVALID_STATE;
-    memset(packet, 0, sizeof(*packet));
-    packet->buff = SDF_BuffNewWithReserve(length);
-    uint8_t *payload = packet->buff == NULL ? NULL : SDF_BuffAppend(packet->buff, length);
-    if (payload == NULL) {
-        if (packet->buff != NULL) SDF_BuffFree(packet->buff);
-        SDF_MemFree(packet);
+    IposlSendTask *task = SDF_MemAlloc(sizeof(*task) + length);
+    if (task == NULL) {
         return IPOSL_ERR_INVALID_STATE;
     }
-    memcpy(payload, data, length);
-    packet->lcid = lcid; packet->tcid = tcid; packet->pi = pi; packet->generation = generation;
-    pthread_mutex_lock(&g_sendMutex);
-    IposlSendQueue *q = IposlFindSendQueue(lcid, tcid, generation);
-    if (q == NULL) {
-        for (size_t i = 0; i < IPOSL_SEND_CHANNELS; ++i) {
-            if (!g_sendQueues[i].used) {
-                q = &g_sendQueues[i];
-                memset(q, 0, sizeof(*q));
-                q->used = true; q->lcid = lcid; q->tcid = tcid; q->generation = generation;
-                break;
-            }
-        }
-    }
-    if (!atomic_load(&g_initialized) || q == NULL || q->cancelled || q->count >= IPOSL_SEND_LIMIT) {
-        pthread_mutex_unlock(&g_sendMutex);
-        IposlFreeUnadmitted(packet);
-        return IPOSL_ERR_INVALID_STATE;
-    }
-    if (q->tail == NULL) q->head = packet;
-    else q->tail->next = packet;
-    q->tail = packet;
-    ++q->count;
-    if (!q->scheduled) {
-        q->scheduled = true;
-        if (CP_PostTask(IposlSendOnCp, q, NULL) != 0) {
-            q->head = q->tail = NULL; q->count = 0; q->scheduled = false;
-            pthread_mutex_unlock(&g_sendMutex);
-            IposlFreeUnadmitted(packet);
-            return IPOSL_ERR_INVALID_STATE;
-        }
-    }
-    pthread_mutex_unlock(&g_sendMutex);
-    return IPOSL_SUCCESS;
+    atomic_init(&task->refs, 2);
+    task->result = IPOSL_ERR_INVALID_STATE;
+    task->lcid = lcid;
+    task->tcid = tcid;
+    task->pi = pi;
+    task->generation = generation;
+    task->length = length;
+    (void)memcpy(task->payload, data, length);
+    /* Like Transport, wait at most 500 ms. The task owns its copy after timeout. */
+    uint32_t posted = CP_PostTaskBlocked(IposlSendOnCp, task, IposlSendRelease, 500);
+    int32_t result = posted == 0 ? task->result : IPOSL_ERR_INVALID_STATE;
+    IposlSendRelease(task);
+    return result;
 }

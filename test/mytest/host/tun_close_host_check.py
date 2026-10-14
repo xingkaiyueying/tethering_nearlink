@@ -25,7 +25,6 @@ with tempfile.TemporaryDirectory(prefix='p3-tun-close-') as directory:
 #include <cstring>
 #include <mutex>
 #include <thread>
-#include <chrono>
 #define private public
 #include "nearlink_ipshare_tun.h"
 #undef private
@@ -38,18 +37,11 @@ std::condition_variable cv;
 bool entered=false,released=false;
 std::atomic_bool stopped{false},closed{false};
 std::atomic_int reads{0},callbacks{0};
-bool autoWake=false,batch=false;
-int wakeWrites=0,polls=0;
 int poll(pollfd*p,int,int) {
- if(batch){++polls;p->revents=POLLIN;return 1;}
  std::unique_lock<std::mutex> lock(gate);entered=true;cv.notify_all();
  cv.wait(lock,[]{return released;});p->revents=POLLIN;return 1;
 }
-ssize_t read(int,void*p,size_t){++reads;if(batch){std::memset(p,0x45,64);return 64;}return 1;}
-ssize_t write(int fd,const void*,size_t n){
- if(autoWake){assert(fd==19);++wakeWrites;{std::lock_guard<std::mutex> lock(gate);released=true;}cv.notify_all();}
- return n;
-}
+ssize_t read(int,void*,size_t){++reads;return 1;}
 int close(int){closed=true;assert(stopped);return 0;}
 void logInfo(const char*text) {if(std::strstr(text,"read loop stopped"))stopped=true;}
 template<class... Args> void logInfo(const char*text,Args...){logInfo(text);}
@@ -68,24 +60,10 @@ int main(){
  while(tun.running_.load())std::this_thread::yield();
  {std::lock_guard<std::mutex> lock(gate);released=true;}cv.notify_all();
  cleanup.join();assert(closed && stopped && reads==0 && callbacks==0 && tun.fd_==-1);
- // Production wake descriptor unblocks poll without the old 200 ms idle timeout.
- entered=released=false;stopped=closed=false;autoWake=true;
- OHOS::Nearlink::NearlinkIpShareTun wakeTun;
- wakeTun.fd_=17;wakeTun.wakeRead_=18;wakeTun.wakeWrite_=19;wakeTun.running_=true;
- wakeTun.callback_=[](const uint8_t*,uint16_t){++callbacks;};
- wakeTun.reader_=std::thread([&]{wakeTun.ReadLoop();});
- {std::unique_lock<std::mutex> lock(gate);cv.wait(lock,[]{return entered;});}
- wakeTun.Close();assert(wakeWrites==1 && stopped && closed && reads==0 && callbacks==0);
- // A ready fd carries multiple distinct packets per poll; packet boundaries remain intact.
- autoWake=false;batch=true;stopped=closed=false;
- OHOS::Nearlink::NearlinkIpShareTun batchTun;
- batchTun.fd_=17;batchTun.running_=true;
- batchTun.callback_=[&](const uint8_t*p,uint16_t n){assert(p[0]==0x45 && n==64);if(++callbacks==40)batchTun.running_=false;};
- batchTun.ReadLoop();batchTun.Close();assert(reads==40 && callbacks==40 && polls<40 && stopped);
 }
 ''', encoding='utf-8')
     executable = root / 'check.exe'
     subprocess.run([sys.argv[1] if len(sys.argv) > 1 else 'g++', '-std=c++17', '-pthread',
         '-I' + str(root), str(root / 'check.cpp'), '-o', str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
-print('TUN production close/read race: join before fd release, no post-stop read/callback, explicit wake and packet batching PASS')
+print('TUN production close/read race: join before fd release, no post-stop read/callback PASS')

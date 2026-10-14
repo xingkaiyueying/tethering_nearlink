@@ -17,15 +17,9 @@
 #include <array>
 #include <chrono>
 #include <cstring>
-#include <future>
-#include <vector>
 
 #include "SleProperties.h"
 #include "SleRemoteDeviceAdapter.h"
-#include "SleRemoteDeviceManager.h"
-#include "SleInterfaceProfileCdsm.h"
-#include "SleInterfaceProfileManager.h"
-#include "interface_scan_service.h"
 #include "ThreadUtil.h"
 #include "iposl_profile.h"
 #include "log.h"
@@ -95,7 +89,6 @@ int32_t NearlinkIpShareService::Initialize()
         .canSend = &NearlinkIpShareService::CanSend,
         .onPeerCapabilities = &NearlinkIpShareService::OnPeerCapabilities,
         .isSecureAddress = &NearlinkIpShareService::IsSecureAddress,
-        .onSendComplete = &NearlinkIpShareChannel::OnSendComplete,
     };
     int32_t profileRet = IposlProfileInit(&callbacks);
     if (profileRet != IPOSL_SUCCESS) {
@@ -174,60 +167,20 @@ int32_t NearlinkIpShareService::ValidateSecurePeer(const std::string &peerAddres
         HILOGE("[IpShare][Service] secure-peer validation failed: remote-device adapter unavailable");
         return IP_SHARE_LINK_NOT_SECURE;
     }
-    struct SecuritySnapshot {
-        bool bonded{false};
-        bool connected{false};
-        bool encrypted{false};
-        uint8_t addressType{0};
-    };
-    auto result = std::make_shared<std::promise<SecuritySnapshot>>();
-    auto future = result->get_future();
-    // One live query on the same owner thread as the original four adapter queries.
-    // The shared result remains alive if the owner thread runs after our timeout.
-    DoInDeviceAdapterThread([address, result]() {
-        SecuritySnapshot snapshot;
-        auto *manager = SleRemoteDeviceManager::GetInstance();
-        snapshot.bonded = manager->IsBondedFromLocal(address);
-        if (snapshot.bonded) {
-            auto *cdsm = static_cast<ProfileCdsm *>(
-                SleInterfaceProfileManager::GetInstance().GetProfileService(PROFILE_NAME_CDSM));
-            std::vector<NearlinkCdsmInfo> members;
-            if (cdsm == nullptr || cdsm->CdsmGetAllMemberInfo(address, members) != NL_NO_ERROR) {
-                snapshot.connected = manager->IsAcbConnected(address);
-                snapshot.encrypted = manager->IsAcbEncrypted(address);
-            } else {
-                // Preserve the existing independent OR checks for CDSM members.
-                for (const auto &member : members) {
-                    snapshot.connected |= manager->IsAcbConnected(member.addr_);
-                    snapshot.encrypted |= manager->IsAcbEncrypted(member.addr_);
-                }
-            }
-            snapshot.addressType = InterfaceScanService::GetInstance().GetDeviceAddrType(address.GetAddress());
-            if (snapshot.addressType == static_cast<uint8_t>(SLE_ADDR_TYPE::SLE_ADDR_TYPE_END)) {
-                snapshot.addressType = manager->GetPeerDeviceAddrType(address);
-            }
-        }
-        result->set_value(snapshot);
-    });
-    if (future.wait_for(std::chrono::milliseconds(500)) != std::future_status::ready) {
-        HILOGE("[IpShare][Service] secure-peer validation failed: owner query timed out");
-        return IP_SHARE_LINK_NOT_SECURE;
-    }
-    auto snapshot = future.get();
-    if (!snapshot.bonded) {
+    if (!adapter->IsBondedFromLocal(address)) {
         HILOGE("[IpShare][Service] secure-peer validation failed: peer is not bonded");
         return IP_SHARE_LINK_NOT_SECURE;
     }
-    if (!snapshot.connected) {
+    if (!adapter->IsAcbConnected(address)) {
         HILOGE("[IpShare][Service] secure-peer validation failed: ACB is disconnected");
         return IP_SHARE_LINK_NOT_SECURE;
     }
-    if (!snapshot.encrypted) {
+    if (!adapter->IsAcbEncrypted(address)) {
         HILOGE("[IpShare][Service] secure-peer validation failed: ACB is not encrypted");
         return IP_SHARE_LINK_NOT_SECURE;
     }
     address.ConvertToUint8(peer, 6);
-    addressType = snapshot.addressType;
+    addressType = adapter->GetPeerDeviceAddrType(address);
     return IP_SHARE_OK;
 }
 
@@ -1177,8 +1130,6 @@ int32_t NearlinkIpShareService::PrepareMode(const uint8_t peer[6], uint8_t mode,
 bool NearlinkIpShareService::CanSend(uint16_t lcid, uint8_t tcid, uint8_t pi, uint64_t generation)
 {
     auto &service = GetInstance();
-    uint8_t peer[6];
-    uint64_t serverGeneration = 0;
     std::shared_ptr<NearlinkIpShareChannel> channel;
     bool gatewayAny = false;
     {
@@ -1192,20 +1143,14 @@ bool NearlinkIpShareService::CanSend(uint16_t lcid, uint8_t tcid, uint8_t pi, ui
             for (const auto &entry : service.gatewayPeers_) {
                 if (entry != nullptr && entry->epoch == generation && !entry->releasing &&
                     entry->channel != nullptr) {
-                    memcpy(peer, entry->address.data(), 6);
                     channel = entry->channel;
-                    serverGeneration = service.status_.generation;
                     break;
                 }
             }
-        } else {
-            memcpy(peer, service.peer_, 6);
-            serverGeneration = generation;
         }
     }
-    if ((gatewayAny && channel == nullptr) || !IsSecure(peer, serverGeneration)) {
-        return false;
-    }
+    // Authentication/encryption are checked during session setup. The packet gate
+    // retains lifecycle and channel/generation checks without querying the adapter.
     return gatewayAny ? channel != nullptr && channel->CanSend(lcid, tcid, pi, generation) :
         NearlinkIpShareChannel::GetInstance().CanSend(lcid, tcid, pi, generation);
 }

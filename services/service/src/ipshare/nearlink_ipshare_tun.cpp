@@ -16,7 +16,6 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
@@ -114,21 +113,6 @@ int32_t NearlinkIpShareTun::Open(const PacketCallback &callback, const std::stri
         (void)close(fd);
         return upRet;
     }
-    int wake[2];
-    if (pipe(wake) != 0) {
-        int error = errno;
-        (void)close(fd);
-        return -error;
-    }
-    for (int wakeFd : wake) {
-        if (fcntl(wakeFd, F_SETFL, O_NONBLOCK) < 0 || fcntl(wakeFd, F_SETFD, FD_CLOEXEC) < 0) {
-            int error = errno;
-            (void)close(wake[0]); (void)close(wake[1]); (void)close(fd);
-            return -error;
-        }
-    }
-    wakeRead_ = wake[0];
-    wakeWrite_ = wake[1];
     callback_ = callback;
     ifaceName_ = ifaceName;
     fd_ = fd;
@@ -141,18 +125,11 @@ int32_t NearlinkIpShareTun::Open(const PacketCallback &callback, const std::stri
 void NearlinkIpShareTun::Close()
 {
     int fd = -1;
-    int wakeRead = -1, wakeWrite = -1;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         running_.store(false);
         fd = fd_;
         fd_ = -1;
-        wakeRead = wakeRead_; wakeWrite = wakeWrite_;
-        wakeRead_ = wakeWrite_ = -1;
-    }
-    if (wakeWrite >= 0) {
-        const uint8_t stop = 1;
-        (void)write(wakeWrite, &stop, sizeof(stop));
     }
     if (reader_.joinable()) {
         reader_.join();
@@ -162,18 +139,9 @@ void NearlinkIpShareTun::Close()
     if (fd >= 0) {
         (void)close(fd);
     }
-    if (wakeRead >= 0) (void)close(wakeRead);
-    if (wakeWrite >= 0) (void)close(wakeWrite);
     std::lock_guard<std::mutex> lock(mutex_);
     callback_ = nullptr;
-    capacityCallback_ = nullptr;
     HILOGI("[IpShare][Tun] interface closed hadFd=%{public}d", fd >= 0);
-}
-
-void NearlinkIpShareTun::SetCapacityCallback(const CapacityCallback &callback)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    capacityCallback_ = callback;
 }
 
 int32_t NearlinkIpShareTun::Write(const uint8_t *data, uint16_t length)
@@ -234,21 +202,20 @@ bool NearlinkIpShareTun::ParseIpv6Evidence(const std::string &text, uint32_t ind
 void NearlinkIpShareTun::ReadLoop()
 {
     uint8_t packet[IP_SHARE_PACKET_MAX + 1] = {0};
-    int fd, wake;
-    PacketCallback callback;
-    CapacityCallback capacity;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        fd = fd_; wake = wakeRead_; callback = callback_; capacity = capacityCallback_;
-    }
     HILOGI("[IpShare][Tun] read loop started");
     while (running_.load()) {
+        int fd = -1;
+        PacketCallback callback;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            fd = fd_;
+            callback = callback_;
+        }
         if (fd < 0) {
             break;
         }
-        if (capacity && !capacity()) continue;
-        struct pollfd pollFds[2] = {{fd, POLLIN, 0}, {wake, POLLIN, 0}};
-        int pollResult = poll(pollFds, wake >= 0 ? 2 : 1, wake >= 0 ? -1 : 200);
+        struct pollfd pollFd = {.fd = fd, .events = POLLIN, .revents = 0};
+        int pollResult = poll(&pollFd, 1, 200);
         if (!running_.load()) {
             break;
         }
@@ -256,25 +223,17 @@ void NearlinkIpShareTun::ReadLoop()
             HILOGE("[DHCP][IpShare][Tun] poll failed errno=%{public}d", errno);
             continue;
         }
-        if (wake >= 0 && (pollFds[1].revents & POLLIN) != 0) break;
-        if (pollResult == 0 || (pollFds[0].revents & POLLIN) == 0) {
+        if (pollResult == 0 || (pollFd.revents & POLLIN) == 0) {
             continue;
         }
-        auto started = std::chrono::steady_clock::now();
-        for (unsigned n = 0; n < 16 && running_.load(); ++n) {
-            if (capacity && !capacity()) break;
-            ssize_t length = read(fd, packet, sizeof(packet));
-            if (length > 0 && length <= static_cast<ssize_t>(IP_SHARE_PACKET_MAX) && callback) {
-                callback(packet, static_cast<uint16_t>(length));
-            } else if (length < 0) {
-                if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-                    HILOGE("[DHCP][IpShare][Tun] read failed errno=%{public}d", errno);
-                }
-                break;
-            } else if (length > 0 && !callback) {
-                HILOGE("[DHCP][IpShare][Tun] read dropped: packet callback is null");
-            } else if (length == 0) break;
-            if (std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(2)) break;
+        ssize_t length = read(fd, packet, sizeof(packet));
+        if (length > 0 && length <= static_cast<ssize_t>(IP_SHARE_PACKET_MAX) && callback) {
+
+            callback(packet, static_cast<uint16_t>(length));
+        } else if (length < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            HILOGE("[DHCP][IpShare][Tun] read failed errno=%{public}d", errno);
+        } else if (length > 0 && !callback) {
+            HILOGE("[DHCP][IpShare][Tun] read dropped: packet callback is null");
         }
     }
     HILOGI("[IpShare][Tun] read loop stopped");

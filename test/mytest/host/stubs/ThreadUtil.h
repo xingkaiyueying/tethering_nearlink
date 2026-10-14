@@ -4,18 +4,8 @@
 #include <cstdint>
 #include <algorithm>
 #include <string>
-#include <atomic>
 namespace OHOS::Nearlink {
 inline std::deque<std::function<void()>> tasks;
-inline std::atomic<unsigned> mockSecurityQueries{0};
-inline bool mockDeferDeviceQueries = false;
-inline std::deque<std::function<void()>> mockDeviceQueries;
-inline void DoInDeviceAdapterThread(const std::function<void()> &fn)
-{
-    ++mockSecurityQueries;
-    if (mockDeferDeviceQueries) mockDeviceQueries.push_back(fn);
-    else fn();
-}
 struct DelayedTask {
     std::string name;
     std::function<void()> callback;

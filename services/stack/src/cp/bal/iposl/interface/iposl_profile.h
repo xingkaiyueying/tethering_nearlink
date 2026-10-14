@@ -58,8 +58,6 @@ typedef struct IposlProfileCallbacks {
     /* Terminal-only result of reading the gateway's complete mode bitmap. */
     void (*onPeerCapabilities)(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t peerModes, uint64_t generation);
     bool (*isSecureAddress)(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType, uint64_t generation);
-    /* CP result means DTAP admission, not air-interface delivery. Optional, private callback. */
-    void (*onSendComplete)(uint16_t lcid, uint8_t tcid, uint8_t pi, uint64_t generation, int32_t result);
 } IposlProfileCallbacks;
 
 int32_t IposlProfileInit(const IposlProfileCallbacks *callbacks);
@@ -74,14 +72,10 @@ int32_t IposlProfileProbePeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t a
 int32_t IposlProfileStartTerminal(const uint8_t gateway[IPOSL_LAYER2_ID_LEN], uint8_t addressType,
     const uint8_t localLayer2[IPOSL_LAYER2_ID_LEN], uint8_t mode, uint64_t generation);
 void IposlProfileStopClient(void);
-/* Called from TUN: success means bounded queue admission; DTAP result is asynchronous. */
+/* Called from the TUN thread; copies data and serializes DTAP access on CP. */
 int32_t IposlProfileSendIpv4(uint16_t lcid, uint8_t tcid, const uint8_t *data, uint16_t length);
 int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *data,
     uint16_t length, uint64_t generation);
-/* Only the IPoSL-owned queue is covered; these APIs do not alter DTAP/controller credits. */
-bool IposlProfileWaitSendCapacity(uint16_t lcid, uint8_t tcid, uint64_t generation);
-void IposlProfileCancelSend(uint16_t lcid, uint8_t tcid, uint64_t generation);
-bool IposlProfileSendIsDrained(uint16_t lcid, uint8_t tcid, uint64_t generation);
 void IposlCodecS1LinkLocal(const uint8_t layer2[6], uint8_t address[16]);
 bool IposlCodecValidatePacket(uint8_t pi, const uint8_t *data, size_t length);
 int32_t IposlCodecEncodeConfigMode(const uint8_t layer2[IPOSL_LAYER2_ID_LEN], uint8_t mode,
