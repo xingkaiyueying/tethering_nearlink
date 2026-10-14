@@ -15,6 +15,9 @@ static int creates, destroys, tunWrites, sent;
 static uint8_t sentPi;
 static bool secure = true;
 static uint32_t destroyResult;
+extern "C" bool IposlProfileWaitSendCapacity(uint16_t,uint8_t,uint64_t) { return true; }
+extern "C" bool IposlProfileSendIsDrained(uint16_t,uint8_t,uint64_t) { return true; }
+extern "C" void IposlProfileCancelSend(uint16_t,uint8_t,uint64_t) {}
 extern "C" uint32_t QOSM_TransChannelCreate(const QOSM_TransChannelParams_S *) { ++creates; return 0; }
 extern "C" uint32_t QOSM_TransChannelDestroy(const QOSM_TransChannelReleaseParams_S *) { ++destroys; return destroyResult; }
 extern "C" int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *, uint16_t, uint64_t gen)
@@ -28,6 +31,7 @@ bool NearlinkIpShareService::CanSend(uint16_t l, uint8_t t, uint8_t p, uint64_t 
 NearlinkIpShareTun::~NearlinkIpShareTun() {}
 int32_t NearlinkIpShareTun::Open(const PacketCallback &, const std::string &) { fd_ = 1; return 0; }
 void NearlinkIpShareTun::Close() { fd_ = -1; }
+void NearlinkIpShareTun::SetCapacityCallback(const CapacityCallback &c) { capacityCallback_ = c; }
 int32_t NearlinkIpShareTun::Write(const uint8_t *, uint16_t) { ++tunWrites; return fd_ >= 0 ? 0 : -1; }
 bool NearlinkIpShareTun::IsOpen() const { return fd_ >= 0; }
 bool NearlinkIpShareTun::ParseIpv6Evidence(const std::string &text,uint32_t index,uint8_t *out,const std::string &)

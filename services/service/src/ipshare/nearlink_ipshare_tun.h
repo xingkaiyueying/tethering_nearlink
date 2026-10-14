@@ -27,6 +27,7 @@ namespace OHOS::Nearlink {
 class NearlinkIpShareTun final {
 public:
     using PacketCallback = std::function<void(const uint8_t *, uint16_t)>;
+    using CapacityCallback = std::function<bool()>;
 
     NearlinkIpShareTun() = default;
     ~NearlinkIpShareTun();
@@ -35,6 +36,7 @@ public:
     void Close();
     int32_t Write(const uint8_t *data, uint16_t length);
     bool IsOpen() const;
+    void SetCapacityCallback(const CapacityCallback &callback);
     static bool IsIpv6AddressUsable(const uint8_t address[16], const std::string &ifaceName = "sleip0");
     static bool ParseIpv6Evidence(const std::string &text, uint32_t index, uint8_t address[16],
                                   const std::string &ifaceName = "sleip0");
@@ -44,8 +46,11 @@ public:
 
     mutable std::mutex mutex_;
     int fd_ {-1};
+    int wakeRead_ {-1};
+    int wakeWrite_ {-1};
     std::atomic_bool running_ {false};
     PacketCallback callback_;
+    CapacityCallback capacityCallback_;
     std::thread reader_;
     std::string ifaceName_;
 };

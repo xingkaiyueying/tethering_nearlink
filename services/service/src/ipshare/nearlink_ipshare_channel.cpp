@@ -179,7 +179,8 @@ void NearlinkIpShareChannel::Deinitialize()
 bool NearlinkIpShareChannel::IsDrained()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    return !active_ && !channelPending_ && !channelEstablished_ && !releasing_ && mode_ == 0 && !tun_.IsOpen();
+    return !active_ && !channelPending_ && !channelEstablished_ && !releasing_ && mode_ == 0 && !tun_.IsOpen() &&
+        IposlProfileSendIsDrained(lcid_, tcid_, generation_);
 }
 
 bool NearlinkIpShareChannel::IsEstablished()
@@ -322,6 +323,7 @@ int NearlinkIpShareChannel::OnIpv6Received(DTAP_Data_Info_S *info, SDF_Buff_S *b
 int32_t NearlinkIpShareChannel::CreateTun(const std::string &ifaceName)
 {
     ifaceName_ = ifaceName;
+    tun_.SetCapacityCallback([this]() { return WaitSendCapacity(); });
     HILOGI("[IpShare][Channel] create TUN requested");
     int32_t ret = tun_.Open([this](const uint8_t *data, uint16_t length) {
         if (Send(data, length) != 0) {
@@ -444,6 +446,7 @@ void NearlinkIpShareChannel::Close()
         dhcpRequest_ = false;
         boundIp_ = 0;
         ipv6_.Reset();
+        IposlProfileCancelSend(lcid_, tcid_, generation_);
     }
     if (destroy) {
         int32_t ret = QOSM_TransChannelDestroy(&release);
@@ -638,18 +641,52 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
 int NearlinkIpShareChannel::OnIpv4Received(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
 {
     if (info == nullptr) return -1;
-    std::vector<std::shared_ptr<NearlinkIpShareChannel>> channels;
+    std::shared_ptr<NearlinkIpShareChannel> owner;
     {
         std::lock_guard<std::mutex> lock(g_channelRegistryMutex);
-        channels = g_channelRegistry;
+        for (const auto &channel : g_channelRegistry) {
+            if (channel->OwnsChannel(info->lcid, info->tcid)) { owner = channel; break; }
+        }
     }
-    for (const auto &channel : channels) {
-        if (!channel->OwnsChannel(info->lcid, info->tcid)) continue;
-        int ret = channel->Receive(info, buffer);
-        if (ret != 0) ++channel->rejected_;
-        return ret;
+    if (owner == nullptr) return -1;
+    int ret = owner->Receive(info, buffer);
+    if (ret != 0) ++owner->rejected_;
+    return ret;
+}
+
+void NearlinkIpShareChannel::OnSendComplete(uint16_t lcid, uint8_t tcid, uint8_t pi,
+    uint64_t generation, int32_t result)
+{
+    std::shared_ptr<NearlinkIpShareChannel> owner;
+    {
+        std::lock_guard<std::mutex> lock(g_channelRegistryMutex);
+        for (const auto &channel : g_channelRegistry) {
+            std::lock_guard<std::mutex> state(channel->mutex_);
+            if (channel->lcid_ == lcid && channel->tcid_ == tcid && channel->generation_ == generation) {
+                owner = channel;
+                break;
+            }
+        }
     }
-    return -1;
+    if (owner == nullptr) return;
+    std::lock_guard<std::mutex> state(owner->mutex_);
+    if (owner->lcid_ != lcid || owner->tcid_ != tcid || owner->generation_ != generation) return;
+    if (result != 0) ++owner->rejected_;
+    else if (pi == DTAP_PI_IPV4) ++owner->tx4_;
+    else ++owner->tx6_;
+}
+
+bool NearlinkIpShareChannel::WaitSendCapacity()
+{
+    uint16_t lcid;
+    uint8_t tcid;
+    uint64_t generation;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!channelEstablished_) return true; // Preserve pre-establishment packet policy handling.
+        lcid = lcid_; tcid = tcid_; generation = generation_;
+    }
+    return IposlProfileWaitSendCapacity(lcid, tcid, generation);
 }
 
 int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
@@ -735,11 +772,7 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
         HILOGE("[IpShare][TX] DTAP send failed lcid=%{public}u tcid=%{public}u ret=%{public}d", lcid, tcid, ret);
         return -1;
     }
-    if (pi == 1) {
-        ++tx4_;
-    } else {
-        ++tx6_;
-    }
+    // TX counters advance only when CP reports DTAP admission, not producer queue admission.
     return 0;
 }
 

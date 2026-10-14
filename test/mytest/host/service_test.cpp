@@ -8,6 +8,9 @@
 #include <array>
 #include <atomic>
 #include <deque>
+#include <future>
+#include <vector>
+#include <iostream>
 #include "nearlink_ipshare_status.cpp"
 #include "iposl_codec.c"
 #include "parameters.h"
@@ -35,12 +38,16 @@ extern "C" int32_t IposlProfileStartTerminal(const uint8_t *,uint8_t,const uint8
 { profileGeneration=g; ++starts; return 0; }
 extern "C" int32_t IposlProfileProbePeer(const uint8_t *,uint8_t,uint8_t,uint64_t) { return 0; }
 extern "C" int32_t IposlProfileSendIp(uint16_t,uint8_t,uint8_t,const uint8_t *,uint16_t,uint64_t) { return 0; }
+extern "C" bool IposlProfileWaitSendCapacity(uint16_t,uint8_t,uint64_t) { return true; }
+extern "C" bool IposlProfileSendIsDrained(uint16_t,uint8_t,uint64_t) { return true; }
+extern "C" void IposlProfileCancelSend(uint16_t,uint8_t,uint64_t) {}
 extern "C" uint32_t QOSM_TransChannelCreate(const QOSM_TransChannelParams_S *) { return 0; }
 extern "C" uint32_t QOSM_TransChannelDestroy(const QOSM_TransChannelReleaseParams_S *) { return 0; }
 namespace OHOS::Nearlink {
 NearlinkIpShareTun::~NearlinkIpShareTun() {}
 int32_t NearlinkIpShareTun::Open(const PacketCallback &, const std::string &) { fd_=1; return 0; }
 void NearlinkIpShareTun::Close() { fd_=-1; }
+void NearlinkIpShareTun::SetCapacityCallback(const CapacityCallback &c) { capacityCallback_=c; }
 int32_t NearlinkIpShareTun::Write(const uint8_t *,uint16_t) { ++writes; return 0; }
 bool NearlinkIpShareTun::IsOpen() const { return fd_>=0; }
 bool NearlinkIpShareTun::ParseIpv6Evidence(const std::string &,uint32_t,uint8_t *,const std::string &) { return false; }
@@ -271,4 +278,21 @@ int main()
     assert(status.state==NearlinkIpShareState::IDLE);
     sending=false;cpSender.join();
     s.Shutdown();
+    uint8_t verified[6], type=0;
+    unsigned queries=mockSecurityQueries.load();
+    assert(s.ValidateSecurePeer(address,verified,type)==0 && type==mockAddressType);
+    assert(mockSecurityQueries.load()==queries+1);
+    mockBonded=false; assert(s.ValidateSecurePeer(address,verified,type)!=0); mockBonded=true;
+    mockConnected=false; assert(s.ValidateSecurePeer(address,verified,type)!=0); mockConnected=true;
+    mockEncrypted=false; assert(s.ValidateSecurePeer(address,verified,type)!=0); mockEncrypted=true;
+    mockCdsmKnown=true; mockCdsmMembers.clear();
+    assert(s.ValidateSecurePeer(address,verified,type)!=0); // An empty group must not fall back to the peer.
+    mockCdsmMembers.push_back({RawAddress(address)});
+    assert(s.ValidateSecurePeer(address,verified,type)==0); mockCdsmKnown=false;
+    mockDeferDeviceQueries=true;
+    assert(s.ValidateSecurePeer(address,verified,type)!=0);
+    mockDeferDeviceQueries=false;
+    while(!mockDeviceQueries.empty()) {auto fn=mockDeviceQueries.front();mockDeviceQueries.pop_front();fn();}
+    assert(s.ValidateSecurePeer(address,verified,type)==0); // Late owner work has valid shared ownership.
+    std::cout << "IPShare live security: one owner query, independent state rejection, CDSM and late timeout ownership PASS\n";
 }

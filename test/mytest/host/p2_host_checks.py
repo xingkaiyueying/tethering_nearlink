@@ -42,6 +42,24 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
         if source.stem == 'service_test':
             for name in ('nearlink_ipshare_service.cpp', 'nearlink_ipshare_service.h'):
                 shutil.copyfile(channel / name, out / name)
+            security_before = os.environ.get('P3_SECURITY_QUERY_BEFORE_REF')
+            if security_before:
+                signature = 'int32_t NearlinkIpShareService::ValidateSecurePeer('
+                def secure_body(text):
+                    start = text.index(signature)
+                    brace = text.index('{', start)
+                    depth = 1
+                    end = brace + 1
+                    while depth:
+                        depth += (text[end] == '{') - (text[end] == '}')
+                        end += 1
+                    return text[start:end]
+                path = 'services/service/src/ipshare/nearlink_ipshare_service.cpp'
+                old = subprocess.check_output(['git', '-c', f'safe.directory={repo.as_posix()}',
+                    '-C', str(repo), 'show', security_before + ':' + path]).decode('utf-8')
+                current = (out / 'nearlink_ipshare_service.cpp').read_text(encoding='utf-8')
+                (out / 'nearlink_ipshare_service.cpp').write_text(
+                    current.replace(secure_body(current), secure_body(old)), encoding='utf-8')
             setup_before = os.environ.get('P3_PEER_SETUP_BEFORE_REF')
             if setup_before:
                 signature = 'int32_t NearlinkIpShareService::PrepareMode('
@@ -65,9 +83,9 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
         print(source.stem + '=PASS', flush=True)
 
     production = (profile / 'src/iposl_profile.c').read_text(encoding='utf-8')
-    (out / 'profile_send.inc').write_text(production[production.index('/* The caller and CP task'):], encoding='utf-8')
+    (out / 'profile_send.inc').write_text(production[production.index('/* IPoSL-owned bounded queues'):], encoding='utf-8')
     exe = out / 'profile_send_test.exe'
-    subprocess.run([a.cc, '-std=c11', '-Wall', '-Wextra', '-Werror', '-I'+str(out),
+    subprocess.run([a.cc, '-std=c11', '-pthread', '-Wall', '-Wextra', '-Werror', '-I'+str(out),
                     str(here/'profile_send_test.c'), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
     print('profile_send_test=PASS (production CP send functions; platform/allocator mocked)', flush=True)
@@ -75,7 +93,7 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
     syntax = out / 'syntax'
     syntax.mkdir()
     (syntax / 'nlstk_log.h').write_text('#define NLSTK_LOG_INFO(...) ((void)0)\n#define NLSTK_LOG_WARN(...) ((void)0)\n#define NLSTK_LOG_ERROR(...) ((void)0)\n')
-    (syntax / 'cp_worker.h').write_text('#include <stdint.h>\nuint32_t CP_PostTaskBlocked(void (*cb)(void *),void *arg,void (*freeCb)(void *),int timeout);\n')
+    (syntax / 'cp_worker.h').write_text('#include <stdint.h>\nuint32_t CP_PostTask(void (*cb)(void *),void *arg,void (*freeCb)(void *));\nuint32_t CP_PostTaskBlocked(void (*cb)(void *),void *arg,void (*freeCb)(void *),int timeout);\n')
     includes = sorted({str(p.parent) for p in (repo/'services/stack').rglob('*.h')})
     for name in ('iposl_client.c', 'iposl_server.c', 'iposl_profile.c'):
         subprocess.run([a.cc, '-std=c11', '-fsyntax-only', '-I'+str(syntax),

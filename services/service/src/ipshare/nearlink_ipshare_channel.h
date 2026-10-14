@@ -60,6 +60,7 @@ public:
     static void CancelPassiveReservation(const SLE_Addr_S *addr, uint16_t port);
     static bool HandleChannelStatus(const QOSM_TransChannelRspParams_S *params);
     static int OnIpv4Received(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
+    static void OnSendComplete(uint16_t lcid, uint8_t tcid, uint8_t pi, uint64_t generation, int32_t result);
     NearlinkIpShareChannel() = default;
     ~NearlinkIpShareChannel() = default;
     NearlinkIpShareChannel(const NearlinkIpShareChannel &) = delete;
@@ -72,6 +73,7 @@ private:
     bool OwnsChannel(uint16_t lcid, uint8_t tcid);
     int Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
     int32_t Send(const uint8_t *data, uint16_t length);
+    bool WaitSendCapacity();
     struct DhcpPacket {
         bool request{false};
         bool haveSubnet{false};
