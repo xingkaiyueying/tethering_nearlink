@@ -15,8 +15,8 @@
 #ifndef NEARLINK_IPSHARE_CHANNEL_H
 #define NEARLINK_IPSHARE_CHANNEL_H
 
-#include <chrono>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -24,9 +24,9 @@
 #include <string>
 
 #include "dtap.h"
-#include "nearlink_ipshare_tun.h"
 #include "nearlink_ipshare_ipv6.h"
 #include "nearlink_ipshare_status.h"
+#include "nearlink_ipshare_tun.h"
 #include "qosm_trans_channel.h"
 
 namespace OHOS::Nearlink {
@@ -43,13 +43,12 @@ public:
     int32_t CreateTun(const std::string &ifaceName = "sleip0");
     int32_t Open(const uint8_t peer[6], uint8_t addressType);
     void Close();
-    int32_t SetPeer(const uint8_t peer[6], uint8_t addressType, bool gateway = true,
-                    const uint8_t *clientKey = nullptr, const uint8_t *localLayer2 = nullptr, uint64_t generation = 0);
+    int32_t SetPeer(const uint8_t peer[6], uint8_t addressType, bool gateway = true, const uint8_t *clientKey = nullptr,
+                    const uint8_t *localLayer2 = nullptr, uint64_t generation = 0);
     int32_t PrepareMode(uint8_t mode);
     bool IsDrained();
     bool IsEstablished();
     int32_t UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address);
-    int32_t ResetBinding(uint64_t generation);
     int32_t EnableMode(uint8_t mode);
     bool CanSend(uint16_t lcid, uint8_t tcid, uint8_t pi, uint64_t generation);
     static int OnIpv6Received(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
@@ -72,6 +71,14 @@ private:
     bool OwnsChannel(uint16_t lcid, uint8_t tcid);
     int Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
     int32_t Send(const uint8_t *data, uint16_t length);
+    void RecordPacketErrorLocked(bool received, const char *stage, int32_t code);
+    struct PacketErrorState {
+        uint64_t total{0};
+        uint64_t reported{0};
+        std::chrono::steady_clock::time_point lastReport{};
+    };
+    PacketErrorState receiveErrors_;
+    PacketErrorState sendErrors_;
     struct DhcpPacket {
         bool request{false};
         bool haveSubnet{false};

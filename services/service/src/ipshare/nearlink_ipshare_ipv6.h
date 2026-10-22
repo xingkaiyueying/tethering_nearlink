@@ -16,8 +16,8 @@
 #define NEARLINK_IPSHARE_IPV6_H
 
 #include <array>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace OHOS::Nearlink {

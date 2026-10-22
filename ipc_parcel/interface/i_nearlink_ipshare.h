@@ -30,7 +30,6 @@ public:
     DECLARE_INTERFACE_DESCRIPTOR(u"ohos.ipc.INearlinkIpShare");
 
     virtual int32_t IsPeerSupported(const std::string &peerAddress, bool &supported) = 0;
-    virtual int32_t StartGateway(const std::string &peerAddress) = 0;
     virtual int32_t StartGatewayAny(int32_t mode, int32_t maxTerminals) = 0;
     virtual int32_t GetSupportedMaxTerminals() = 0;
     virtual int32_t StartTerminal(const std::string &gatewayAddress) = 0;
@@ -38,13 +37,13 @@ public:
     virtual int32_t GetStatus(NearlinkIpShareStatus &status) = 0;
     virtual int32_t RegisterObserver(const sptr<INearlinkIpShareObserver> &observer) = 0;
     virtual int32_t UnregisterObserver() = 0;
-    virtual int32_t QueryNearlinkIpShareCapabilities(const std::string &peerAddress, NearlinkIpShareCapabilities &capabilities) = 0;
-    virtual int32_t StartNearlinkGatewayWithMode(const std::string &peerAddress, int32_t mode) = 0;
+    virtual int32_t QueryNearlinkIpShareCapabilities(const std::string &peerAddress,
+                                                     NearlinkIpShareCapabilities &capabilities) = 0;
     virtual int32_t StartNearlinkTerminalWithMode(const std::string &peerAddress, int32_t mode) = 0;
 
     virtual int32_t UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address) = 0;
     virtual int32_t CompleteGatewayPeerRelease(uint64_t generation) = 0;
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // I_NEARLINK_IPSHARE_H
+} // namespace OHOS::Nearlink
+#endif // I_NEARLINK_IPSHARE_H

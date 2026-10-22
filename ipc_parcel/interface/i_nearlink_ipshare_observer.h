@@ -26,5 +26,5 @@ public:
     virtual void OnStatusChanged(const NearlinkIpShareStatus &status) = 0;
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // I_NEARLINK_IPSHARE_OBSERVER_H
+} // namespace OHOS::Nearlink
+#endif // I_NEARLINK_IPSHARE_OBSERVER_H

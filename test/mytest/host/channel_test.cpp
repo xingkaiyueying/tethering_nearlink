@@ -167,5 +167,21 @@ int main()
     destroyResult=0;c.Close();assert(!c.IsDrained());
     rsp.status=QOSM_TRANS_CHANNEL_RELEASED;c.HandleChannelStatus(&rsp);
     assert(c.IsDrained());
+    assert(c.SetPeer(peer,0,true,peer,local,14)==0);
+    for (int n=0;n<1000;++n) c.RecordPacketErrorLocked(false,"DTAP_SEND",-7);
+    assert(c.sendErrors_.total==1000 && c.sendErrors_.reported==1);
+    assert(c.receiveErrors_.total==0);
+    c.sendErrors_.lastReport-=std::chrono::seconds(6);
+    c.RecordPacketErrorLocked(false,"DTAP_SEND",-8);
+    assert(c.sendErrors_.total==1001 && c.sendErrors_.reported==1001);
+    c.RecordPacketErrorLocked(true,"TUN_WRITE",-9);
+    c.RecordPacketErrorLocked(true,"TUN_WRITE",-9);
+    assert(c.receiveErrors_.total==2 && c.receiveErrors_.reported==1);
+    c.Close();assert(c.receiveErrors_.reported==2);
+    assert(c.SetPeer(peer,0,true,peer,local,15)==0);
+    assert(c.sendErrors_.total==0 && c.receiveErrors_.total==0);
+    c.RecordPacketErrorLocked(false,"DTAP_SEND",-7);
+    assert(c.sendErrors_.reported==1); // a new session retains its first error
+    c.Close();
     c.Deinitialize();
 }

@@ -44,13 +44,15 @@ enum {
     IPOSL_ERR_INVALID_STATE = -2,
     IPOSL_ERR_SSAP = -3,
     IPOSL_ERR_NOT_SUPPORTED = -4,
-    /* Private Demo response 0xfe: previous peer session is still draining. */
+    /* Local status: the previous peer session is still draining. */
     IPOSL_ERR_PEER_DRAINING = -6,
 };
 
 typedef struct IposlProfileCallbacks {
-    void (*onPeerSupported)(const uint8_t peer[IPOSL_LAYER2_ID_LEN], bool supported, int32_t error, uint8_t peerModes, bool known, uint64_t generation);
-    void (*onConfigured)(const uint8_t peer[IPOSL_LAYER2_ID_LEN], bool opened, int32_t error, uint8_t mode, uint64_t generation);
+    void (*onPeerSupported)(const uint8_t peer[IPOSL_LAYER2_ID_LEN], bool supported, int32_t error, uint8_t peerModes,
+                            bool known, uint64_t generation);
+    void (*onConfigured)(const uint8_t peer[IPOSL_LAYER2_ID_LEN], bool opened, int32_t error, uint8_t mode,
+                         uint64_t generation);
     /* Synchronous resource admission on CP, before a successful wire response. mode=0 rolls back. */
     int32_t (*prepareMode)(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t mode, uint64_t generation);
     bool (*isSecure)(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint64_t generation);
@@ -65,21 +67,21 @@ void IposlProfileDeinit(void);
 int32_t IposlProfileStartServerAny(uint8_t mode, uint32_t capacity, uint64_t generation);
 void IposlProfileReleaseServerPeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType);
 int32_t IposlProfileReleaseServerPeerChecked(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType);
-int32_t IposlProfileStartServer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType, uint8_t mode, uint64_t generation);
 void IposlProfileStopServer(void);
 bool IposlProfileServerIsDrained(void);
-int32_t IposlProfileProbePeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType, uint8_t mode, uint64_t generation);
+int32_t IposlProfileProbePeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType, uint8_t mode,
+                              uint64_t generation);
 int32_t IposlProfileStartTerminal(const uint8_t gateway[IPOSL_LAYER2_ID_LEN], uint8_t addressType,
-    const uint8_t localLayer2[IPOSL_LAYER2_ID_LEN], uint8_t mode, uint64_t generation);
+                                  const uint8_t localLayer2[IPOSL_LAYER2_ID_LEN], uint8_t mode, uint64_t generation);
 void IposlProfileStopClient(void);
 /* Called from the TUN thread; copies data and serializes DTAP access on CP. */
 int32_t IposlProfileSendIpv4(uint16_t lcid, uint8_t tcid, const uint8_t *data, uint16_t length);
-int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *data,
-    uint16_t length, uint64_t generation);
+int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *data, uint16_t length,
+                           uint64_t generation);
 void IposlCodecS1LinkLocal(const uint8_t layer2[6], uint8_t address[16]);
 bool IposlCodecValidatePacket(uint8_t pi, const uint8_t *data, size_t length);
-int32_t IposlCodecEncodeConfigMode(const uint8_t layer2[IPOSL_LAYER2_ID_LEN], uint8_t mode,
-    uint8_t *out, size_t outLen);
+int32_t IposlCodecEncodeConfigMode(const uint8_t layer2[IPOSL_LAYER2_ID_LEN], uint8_t mode, uint8_t *out,
+                                   size_t outLen);
 bool IposlCodecGatewayModes(const uint8_t *data, size_t length, uint8_t *modes);
 uint8_t IposlCodecSelectMode(uint8_t requested, uint8_t peerModes);
 bool IposlCodecMayFallback(uint8_t opcode, uint8_t mode, uint8_t result, bool alreadyRetried, bool secure);
@@ -89,14 +91,13 @@ uint8_t IposlProfileDataProtocolIndicator(void);
 int32_t IposlCodecEncodeConfigRequest(const uint8_t layer2[IPOSL_LAYER2_ID_LEN], uint8_t *out, size_t outLen);
 int32_t IposlCodecEncodeOpenRequest(const uint8_t layer2[IPOSL_LAYER2_ID_LEN], uint8_t *out, size_t outLen);
 int32_t IposlCodecEncodeResponse(uint8_t opcode, const uint8_t layer2[IPOSL_LAYER2_ID_LEN], uint8_t result,
-    uint8_t *out, size_t outLen);
-int32_t IposlCodecDecodeRequest(const uint8_t *data, size_t len, uint8_t *opcode,
-    uint8_t layer2[IPOSL_LAYER2_ID_LEN]);
+                                 uint8_t *out, size_t outLen);
+int32_t IposlCodecDecodeRequest(const uint8_t *data, size_t len, uint8_t *opcode, uint8_t layer2[IPOSL_LAYER2_ID_LEN]);
 int32_t IposlCodecDecodeResponse(const uint8_t *data, size_t len, uint8_t expectedOpcode,
-    uint8_t layer2[IPOSL_LAYER2_ID_LEN], uint8_t *result);
+                                 uint8_t layer2[IPOSL_LAYER2_ID_LEN], uint8_t *result);
 bool IposlCodecVerifyGoldenVectors(void);
 
 #ifdef __cplusplus
 }
 #endif
-#endif  // IPOSL_PROFILE_H
+#endif // IPOSL_PROFILE_H

@@ -41,13 +41,6 @@ int32_t NearlinkIpShareServer::GetSupportedMaxTerminals()
     return NearlinkIpShareService::GetInstance().GetSupportedMaxTerminals();
 }
 
-int32_t NearlinkIpShareServer::StartGateway(const std::string &peerAddress)
-{
-    int32_t ret = NearlinkIpShareService::GetInstance().StartGateway(peerAddress);
-    HILOGI("[IpShare][Server] gateway start ret=%{public}d", ret);
-    return ret;
-}
-
 int32_t NearlinkIpShareServer::StartTerminal(const std::string &gatewayAddress)
 {
     int32_t ret = NearlinkIpShareService::GetInstance().StartTerminal(gatewayAddress);
@@ -67,7 +60,6 @@ int32_t NearlinkIpShareServer::GetStatus(NearlinkIpShareStatus &status)
     int32_t ret = NearlinkIpShareService::GetInstance().GetStatus(status);
     if (ret != 0) {
         HILOGE("[IpShare][Server] status failed ret=%{public}d", ret);
-    } else {
     }
     return ret;
 }
@@ -86,14 +78,10 @@ int32_t NearlinkIpShareServer::UnregisterObserver()
     return ret;
 }
 
-int32_t NearlinkIpShareServer::QueryNearlinkIpShareCapabilities(const std::string &peerAddress, NearlinkIpShareCapabilities &capabilities)
+int32_t NearlinkIpShareServer::QueryNearlinkIpShareCapabilities(const std::string &peerAddress,
+                                                                NearlinkIpShareCapabilities &capabilities)
 {
     return NearlinkIpShareService::GetInstance().QueryNearlinkIpShareCapabilities(peerAddress, capabilities);
-}
-
-int32_t NearlinkIpShareServer::StartNearlinkGatewayWithMode(const std::string &peerAddress, int32_t mode)
-{
-    return NearlinkIpShareService::GetInstance().StartNearlinkGatewayWithMode(peerAddress, mode);
 }
 
 int32_t NearlinkIpShareServer::StartNearlinkTerminalWithMode(const std::string &peerAddress, int32_t mode)
@@ -106,4 +94,4 @@ int32_t NearlinkIpShareServer::UpdateValidatedAddress(const NearlinkIpShareAddre
     return NearlinkIpShareService::GetInstance().UpdateValidatedAddress(address);
 }
 
-}  // namespace OHOS::Nearlink
+} // namespace OHOS::Nearlink

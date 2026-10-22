@@ -1250,7 +1250,7 @@ void SleDataTransferService::ChannelStatusCallback(const QOSM_TransChannelRspPar
     NL_CHECK_RETURN(respParams, "stack dt channel cb null");
     if (NearlinkIpShareChannel::HandleChannelStatus(respParams)) {
         HILOGI("[IpShare][DataTransfer] dispatched IPoSL channel status=%{public}d lcid=%{public}u tcid=%{public}u",
-            respParams->status, respParams->lcid, respParams->tcid);
+               respParams->status, respParams->lcid, respParams->tcid);
         return;
     }
     RawAddress rawAddress(RawAddress::ConvertToString(respParams->addr.addr));
@@ -1373,7 +1373,7 @@ int SleDataTransferService::RegisterSleDataTransferCallbackToStack()
     HILOGI("DT stack channel cb ret=0x%{public}x", ret);
     if (ret == 0) {
         ret = QOSM_RegisterIpSharePeerCallbacks(&SleDataTransferService::CheckIpSharePeerCallback,
-            &SleDataTransferService::CancelIpSharePeerCallback);
+                                                &SleDataTransferService::CancelIpSharePeerCallback);
     }
     return ret;
 }

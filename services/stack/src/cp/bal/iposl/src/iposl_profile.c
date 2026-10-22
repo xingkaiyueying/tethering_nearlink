@@ -14,11 +14,11 @@
  */
 #include "iposl_internal.h"
 
-#include <string.h>
-#include <stdatomic.h>
 #include "cp_worker.h"
-#include "sdf_mem.h"
 #include "sdf_buff.h"
+#include "sdf_mem.h"
+#include <stdatomic.h>
+#include <string.h>
 
 #include "dtap.h"
 #include "nlstk_log.h"
@@ -49,10 +49,11 @@ int32_t IposlProfileInit(const IposlProfileCallbacks *callbacks)
         g_callbacks = *callbacks;
         g_callbacksInstalled = true;
     } else if (g_callbacks.onPeerSupported != callbacks->onPeerSupported ||
-        g_callbacks.onConfigured != callbacks->onConfigured || g_callbacks.prepareMode != callbacks->prepareMode ||
-        g_callbacks.isSecure != callbacks->isSecure || g_callbacks.canSend != callbacks->canSend ||
-        g_callbacks.onPeerCapabilities != callbacks->onPeerCapabilities ||
-        g_callbacks.isSecureAddress != callbacks->isSecureAddress) {
+               g_callbacks.onConfigured != callbacks->onConfigured ||
+               g_callbacks.prepareMode != callbacks->prepareMode || g_callbacks.isSecure != callbacks->isSecure ||
+               g_callbacks.canSend != callbacks->canSend ||
+               g_callbacks.onPeerCapabilities != callbacks->onPeerCapabilities ||
+               g_callbacks.isSecureAddress != callbacks->isSecureAddress) {
         return IPOSL_ERR_INVALID_STATE;
     }
     int32_t ret = IposlServerInitialize();
@@ -78,9 +79,13 @@ void IposlProfileDeinit(void)
 
 int32_t IposlProfileStartServerAny(uint8_t mode, uint32_t capacity, uint64_t generation)
 {
-    if (!g_initialized) return IPOSL_ERR_INVALID_STATE;
+    if (!g_initialized) {
+        return IPOSL_ERR_INVALID_STATE;
+    }
     int32_t ret = IposlServerStartAny(mode, capacity, generation);
-    if (ret == IPOSL_SUCCESS) atomic_store(&g_sendGeneration, generation);
+    if (ret == IPOSL_SUCCESS) {
+        atomic_store(&g_sendGeneration, generation);
+    }
     return ret;
 }
 
@@ -92,22 +97,6 @@ void IposlProfileReleaseServerPeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint
 int32_t IposlProfileReleaseServerPeerChecked(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType)
 {
     return IposlServerReleasePeer(peer, addressType);
-}
-
-int32_t IposlProfileStartServer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType, uint8_t mode, uint64_t generation)
-{
-    if (!g_initialized) {
-        NLSTK_LOG_ERROR("[IpShare][IPoSL] server start rejected: profile not initialized");
-        return IPOSL_ERR_INVALID_STATE;
-    }
-    atomic_store(&g_sendGeneration, generation);
-    int32_t ret = IposlServerStart(peer, addressType, mode, generation);
-    if (ret != IPOSL_SUCCESS) {
-        NLSTK_LOG_ERROR("[IpShare][IPoSL] server start failed addressType=%u ret=%d", addressType, ret);
-    } else {
-        NLSTK_LOG_INFO("[IpShare][IPoSL] server start completed addressType=%u", addressType);
-    }
-    return ret;
 }
 
 void IposlProfileStopServer(void)
@@ -122,7 +111,8 @@ bool IposlProfileServerIsDrained(void)
     return IposlServerIsDrained();
 }
 
-int32_t IposlProfileProbePeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType, uint8_t mode, uint64_t generation)
+int32_t IposlProfileProbePeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType, uint8_t mode,
+                              uint64_t generation)
 {
     if (!g_initialized) {
         NLSTK_LOG_ERROR("[IpShare][IPoSL] support probe rejected: profile not initialized");
@@ -138,7 +128,7 @@ int32_t IposlProfileProbePeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t a
 }
 
 int32_t IposlProfileStartTerminal(const uint8_t gateway[IPOSL_LAYER2_ID_LEN], uint8_t addressType,
-    const uint8_t localLayer2[IPOSL_LAYER2_ID_LEN], uint8_t mode, uint64_t generation)
+                                  const uint8_t localLayer2[IPOSL_LAYER2_ID_LEN], uint8_t mode, uint64_t generation)
 {
     if (!g_initialized) {
         NLSTK_LOG_ERROR("[IpShare][IPoSL] terminal start rejected: profile not initialized");
@@ -195,7 +185,9 @@ static void IposlSendOnCp(void *arg)
 {
     IposlSendTask *task = arg;
     const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
-    if (callbacks == NULL || !callbacks->canSend(task->lcid, task->tcid, task->pi, task->generation)) return;
+    if (callbacks == NULL || !callbacks->canSend(task->lcid, task->tcid, task->pi, task->generation)) {
+        return;
+    }
     SDF_Buff_S *buff = SDF_BuffNewWithReserve(task->length);
     if (buff == NULL) {
         return;
@@ -210,7 +202,6 @@ static void IposlSendOnCp(void *arg)
     task->result = (int32_t)DTAP_DataSend(&packet);
     if (task->result != 0) {
         SDF_BuffFree(buff);
-        NLSTK_LOG_ERROR("[IpShare][TX] CP DTAP send failed ret=%d", task->result);
     }
 }
 
@@ -219,8 +210,8 @@ int32_t IposlProfileSendIpv4(uint16_t lcid, uint8_t tcid, const uint8_t *data, u
     return IposlProfileSendIp(lcid, tcid, DTAP_PI_IPV4, data, length, atomic_load(&g_sendGeneration));
 }
 
-int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *data,
-    uint16_t length, uint64_t generation)
+int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *data, uint16_t length,
+                           uint64_t generation)
 {
     if (!IposlCodecValidatePacket(pi, data, length)) {
         return IPOSL_ERR_INVALID_PARAM;

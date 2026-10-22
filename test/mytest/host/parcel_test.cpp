@@ -3,10 +3,10 @@
 #include "nearlink_service_ipc_interface_code.h"
 using namespace OHOS;
 using namespace OHOS::Nearlink;
-static_assert(NL_IPSHARE_IS_PEER_SUPPORTED == 0 && NL_IPSHARE_START_GATEWAY == 1 &&
+static_assert(NL_IPSHARE_IS_PEER_SUPPORTED == 0 &&
     NL_IPSHARE_START_TERMINAL == 2 && NL_IPSHARE_STOP == 3 && NL_IPSHARE_GET_STATUS == 4 &&
     NL_IPSHARE_REGISTER_OBSERVER == 5 && NL_IPSHARE_UNREGISTER_OBSERVER == 6 &&
-    NL_IPSHARE_QUERY_CAPABILITIES == 7 && NL_IPSHARE_START_GATEWAY_WITH_MODE == 8 &&
+    NL_IPSHARE_QUERY_CAPABILITIES == 7 &&
     NL_IPSHARE_START_TERMINAL_WITH_MODE == 9);
 int main()
 {

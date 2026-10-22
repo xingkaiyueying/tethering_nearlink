@@ -14,9 +14,9 @@
  */
 #include "iposl_internal.h"
 
-#include <string.h>
-#include <stdlib.h>
 #include <stdatomic.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "cp_worker.h"
 #include "sdf_mem.h"
@@ -25,37 +25,24 @@
 #include "nlstk_log.h"
 #include "nlstk_ssap_app_server.h"
 
-static const uint8_t g_identifierUuid[16] = {
-    0x8F, 0x6F, 0x1D, 0x00, 0x7B, 0x0C, 0x4A, 0x73, 0x9D, 0x4E, 0x6E, 0x65, 0x61, 0x72, 0x6C, 0x01
-};
-static const uint8_t g_configUuid[16] = {
-    0x5B, 0x28, 0x50, 0x05, 0x45, 0x55, 0x4F, 0xA5, 0xB9, 0x57, 0xC2, 0x9C, 0x0D, 0x8A, 0x60, 0xC3
-};
-static const uint8_t g_terminalCapabilityUuid[16] = {
-    0xFA, 0x36, 0x1B, 0x52, 0xCB, 0x0A, 0x49, 0xED, 0x84, 0x27, 0x1A, 0x67, 0x5A, 0xCC, 0xD9, 0xDB
-};
-static const uint8_t g_terminalStateUuid[16] = {
-    0xE4, 0x72, 0x0A, 0xB0, 0xE6, 0x2A, 0x42, 0xD2, 0xAD, 0x96, 0x98, 0x62, 0x7C, 0xEE, 0xAE, 0xDB
-};
-static const uint8_t g_gatewayCapabilityUuid[16] = {
-    0x2E, 0x68, 0xC5, 0x66, 0xE3, 0x14, 0x46, 0x6D, 0x96, 0x29, 0x40, 0x2F, 0x16, 0xCA, 0xB2, 0x19
-};
-static const uint8_t g_gatewayStateUuid[16] = {
-    0x43, 0x11, 0x7F, 0xB2, 0x90, 0x9E, 0x4B, 0x70, 0xB6, 0xF9, 0x10, 0x52, 0xD7, 0x29, 0xC8, 0x9B
-};
-static const uint8_t g_methodUuid[16] = {
-    0x7A, 0xA3, 0x12, 0x0E, 0xF0, 0xD2, 0x45, 0x60, 0xB7, 0x11, 0xA5, 0xB6, 0x18, 0xB7, 0xA3, 0x2B
-};
+static const uint8_t g_identifierUuid[16] = {0x8F, 0x6F, 0x1D, 0x00, 0x7B, 0x0C, 0x4A, 0x73,
+                                             0x9D, 0x4E, 0x6E, 0x65, 0x61, 0x72, 0x6C, 0x01};
+static const uint8_t g_configUuid[16] = {0x5B, 0x28, 0x50, 0x05, 0x45, 0x55, 0x4F, 0xA5,
+                                         0xB9, 0x57, 0xC2, 0x9C, 0x0D, 0x8A, 0x60, 0xC3};
+static const uint8_t g_terminalCapabilityUuid[16] = {0xFA, 0x36, 0x1B, 0x52, 0xCB, 0x0A, 0x49, 0xED,
+                                                     0x84, 0x27, 0x1A, 0x67, 0x5A, 0xCC, 0xD9, 0xDB};
+static const uint8_t g_terminalStateUuid[16] = {0xE4, 0x72, 0x0A, 0xB0, 0xE6, 0x2A, 0x42, 0xD2,
+                                                0xAD, 0x96, 0x98, 0x62, 0x7C, 0xEE, 0xAE, 0xDB};
+static const uint8_t g_gatewayCapabilityUuid[16] = {0x2E, 0x68, 0xC5, 0x66, 0xE3, 0x14, 0x46, 0x6D,
+                                                    0x96, 0x29, 0x40, 0x2F, 0x16, 0xCA, 0xB2, 0x19};
+static const uint8_t g_gatewayStateUuid[16] = {0x43, 0x11, 0x7F, 0xB2, 0x90, 0x9E, 0x4B, 0x70,
+                                               0xB6, 0xF9, 0x10, 0x52, 0xD7, 0x29, 0xC8, 0x9B};
+static const uint8_t g_methodUuid[16] = {0x7A, 0xA3, 0x12, 0x0E, 0xF0, 0xD2, 0x45, 0x60,
+                                         0xB7, 0x11, 0xA5, 0xB6, 0x18, 0xB7, 0xA3, 0x2B};
 
 static atomic_int g_serverAppId = SSAP_APP_INVALID_ID;
-static uint8_t g_expectedPeer[IPOSL_LAYER2_ID_LEN];
-static uint8_t g_expectedAddressType;
-static uint8_t g_configuredLayer2[IPOSL_LAYER2_ID_LEN];
-static bool g_configured;
 static bool g_serverActive;
 static uint8_t g_allowedMode;
-static uint8_t g_selectedMode;
-static bool g_enabled;
 static uint64_t g_generation;
 
 /* Allocated to the product's configured capacity, never to a fixed peer count. */
@@ -69,21 +56,28 @@ typedef struct {
 } IposlServerPeer;
 static IposlServerPeer *g_peers;
 static uint32_t g_peerCapacity;
-static bool g_anyPeer;
 
 static IposlServerPeer *FindPeer(const SLE_Addr_S *addr)
 {
-    if (addr == NULL || !g_anyPeer) return NULL;
+    if (addr == NULL) {
+        return NULL;
+    }
     for (uint32_t i = 0; i < g_peerCapacity; ++i) {
         if (g_peers[i].used && g_peers[i].addressType == addr->type &&
-            memcmp(g_peers[i].peer, addr->addr, IPOSL_LAYER2_ID_LEN) == 0) return &g_peers[i];
+            memcmp(g_peers[i].peer, addr->addr, IPOSL_LAYER2_ID_LEN) == 0) {
+            return &g_peers[i];
+        }
     }
     return NULL;
 }
 
 static IposlServerPeer *FreePeer(void)
 {
-    for (uint32_t i = 0; i < g_peerCapacity; ++i) if (!g_peers[i].used) return &g_peers[i];
+    for (uint32_t i = 0; i < g_peerCapacity; ++i) {
+        if (!g_peers[i].used) {
+            return &g_peers[i];
+        }
+    }
     return NULL;
 }
 
@@ -92,43 +86,36 @@ static void SetUuid(NLSTK_SsapUuid_S *uuid, const uint8_t value[16])
     (void)memcpy(uuid->uuid, value, sizeof(uuid->uuid));
 }
 
-static bool IsExpectedPeer(const SLE_Addr_S *addr)
-{
-    return addr != NULL && addr->type == g_expectedAddressType &&
-        memcmp(addr->addr, g_expectedPeer, IPOSL_LAYER2_ID_LEN) == 0;
-}
-
-static void FillProperty(NLSTK_SsapServicePropertyParam_S *property, const uint8_t uuid[16],
-    const uint8_t *value, uint16_t valueLen, uint32_t operation)
+static void FillProperty(NLSTK_SsapServicePropertyParam_S *property, const uint8_t uuid[16], const uint8_t *value,
+                         uint16_t valueLen, uint32_t operation)
 {
     /* Demo UUIDs are private 128-bit UUIDs, so their SSAP item types must stay vendor-specific. */
     property->type = ITEM_TYPE_VENDOR_PROPERTY;
     SetUuid(&property->uuid, uuid);
-    property->permission.permissionValue = SSAP_PERMISSION_AUTHENTICATION_NEED | SSAP_PERMISSION_ENCRYPTION_NEED |
-        SSAP_PERMISSION_AUTHORIZATION_NEED;
+    property->permission.permissionValue =
+        SSAP_PERMISSION_AUTHENTICATION_NEED | SSAP_PERMISSION_ENCRYPTION_NEED | SSAP_PERMISSION_AUTHORIZATION_NEED;
     property->operation.operationValue = operation;
     property->val.data = (uint8_t *)value;
     property->val.len = valueLen;
 }
 
-static void OnReadPropertyAuthorize(int32_t appId, uint16_t requestId,
-    NLSTK_SsapServerReadPropertyInfo_S *property)
+static void OnReadPropertyAuthorize(int32_t appId, uint16_t requestId, NLSTK_SsapServerReadPropertyInfo_S *property)
 {
     const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
     IposlServerPeer *entry = property == NULL ? NULL : FindPeer(&property->addr);
-    bool allow = appId == g_serverAppId && g_serverActive && property != NULL &&
-        (g_anyPeer ? callbacks != NULL && callbacks->isSecureAddress != NULL &&
-        callbacks->isSecureAddress(property->addr.addr, property->addr.type, g_generation) :
-        IsExpectedPeer(&property->addr));
+    bool allow = appId == g_serverAppId && g_serverActive && property != NULL && callbacks != NULL &&
+                 callbacks->isSecureAddress != NULL &&
+                 callbacks->isSecureAddress(property->addr.addr, property->addr.type, g_generation);
     if (allow && memcmp(property->uuid.uuid, g_gatewayStateUuid, sizeof(g_gatewayStateUuid)) == 0) {
         uint8_t state[IPOSL_GATEWAY_CAPABILITY_LEN];
-        bool configured = g_anyPeer ? entry != NULL : g_configured;
+        bool configured = entry != NULL;
         memcpy(state, configured ? g_iposlGatewayServing : g_iposlEmptyState,
-            configured ? sizeof(state) : IPOSL_EMPTY_STATE_LEN);
-        if (configured) state[11] = g_anyPeer ? entry->mode : g_selectedMode;
-        NLSTK_VariableData_S value = {
-            .len = (uint16_t)(configured ? sizeof(state) : IPOSL_EMPTY_STATE_LEN), .data = state
-        };
+               configured ? sizeof(state) : IPOSL_EMPTY_STATE_LEN);
+        if (configured) {
+            state[11] = entry->mode;
+        }
+        NLSTK_VariableData_S value = {.len = (uint16_t)(configured ? sizeof(state) : IPOSL_EMPTY_STATE_LEN),
+                                      .data = state};
         /* Both operations copy their data and enqueue on the same SSAP worker, update before read reply. */
         allow = NLSTK_SsapServerUpdatePropertyValue(appId, property->handle, &value) == NLSTK_ERRCODE_SUCCESS;
     }
@@ -156,14 +143,14 @@ static int32_t AddIdentifierService(void)
 static int32_t AddConfigService(void)
 {
     NLSTK_SsapServicePropertyParam_S properties[4] = {0};
-    FillProperty(&properties[0], g_terminalCapabilityUuid, g_iposlTerminalCapability,
-        IPOSL_TERMINAL_CAPABILITY_LEN, SSAP_OPERATE_INDICATION_READ);
-    FillProperty(&properties[1], g_terminalStateUuid, g_iposlEmptyState,
-        IPOSL_EMPTY_STATE_LEN, SSAP_OPERATE_INDICATION_READ | SSAP_OPERATE_INDICATION_NOTIFY);
-    FillProperty(&properties[2], g_gatewayCapabilityUuid, g_iposlGatewayCapability,
-        IPOSL_GATEWAY_CAPABILITY_LEN, SSAP_OPERATE_INDICATION_READ);
-    FillProperty(&properties[3], g_gatewayStateUuid, g_iposlEmptyState,
-        IPOSL_EMPTY_STATE_LEN, SSAP_OPERATE_INDICATION_READ | SSAP_OPERATE_INDICATION_NOTIFY);
+    FillProperty(&properties[0], g_terminalCapabilityUuid, g_iposlTerminalCapability, IPOSL_TERMINAL_CAPABILITY_LEN,
+                 SSAP_OPERATE_INDICATION_READ);
+    FillProperty(&properties[1], g_terminalStateUuid, g_iposlEmptyState, IPOSL_EMPTY_STATE_LEN,
+                 SSAP_OPERATE_INDICATION_READ | SSAP_OPERATE_INDICATION_NOTIFY);
+    FillProperty(&properties[2], g_gatewayCapabilityUuid, g_iposlGatewayCapability, IPOSL_GATEWAY_CAPABILITY_LEN,
+                 SSAP_OPERATE_INDICATION_READ);
+    FillProperty(&properties[3], g_gatewayStateUuid, g_iposlEmptyState, IPOSL_EMPTY_STATE_LEN,
+                 SSAP_OPERATE_INDICATION_READ | SSAP_OPERATE_INDICATION_NOTIFY);
 
     NLSTK_SsapServiceMethodParam_S method = {0};
     method.type = ITEM_TYPE_VENDOR_METHOD;
@@ -180,44 +167,42 @@ static int32_t AddConfigService(void)
     NLSTK_Errcode_E ret = NLSTK_SsapServerAddService(g_serverAppId, &service);
     if (ret != NLSTK_ERRCODE_SUCCESS) {
         NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] configuration service add failed appId=%d ret=%d", g_serverAppId,
-            ret);
+                        ret);
         return IPOSL_ERR_SSAP;
     }
     NLSTK_LOG_INFO("[IpShare][IPoSL][Server] configuration service added appId=%d", g_serverAppId);
     return IPOSL_SUCCESS;
 }
 
-static void OnCallMethodAny(int32_t appId, uint16_t requestId,
-    NLSTK_SsapServerCallMethodRequestInfo_S *method, bool needReturn, bool needAuth)
+static void OnCallMethod(int32_t appId, uint16_t requestId, NLSTK_SsapServerCallMethodRequestInfo_S *method,
+                         bool needReturn, bool needAuth)
 {
     uint8_t opcode = 0, layer2[IPOSL_LAYER2_ID_LEN] = {0}, response[IPOSL_RESPONSE_LEN] = {0};
     uint8_t result = 0xff;
-    int32_t decoded = method == NULL ? IPOSL_ERR_INVALID_PARAM :
-        IposlCodecDecodeRequest(method->param.data, method->param.len, &opcode, layer2);
+    int32_t decoded = method == NULL ? IPOSL_ERR_INVALID_PARAM
+                                     : IposlCodecDecodeRequest(method->param.data, method->param.len, &opcode, layer2);
     const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
     bool accepted = g_serverActive && appId == g_serverAppId && method != NULL && method->handle != 0 &&
-        decoded == IPOSL_SUCCESS && callbacks != NULL &&
-        callbacks->isSecureAddress != NULL &&
-        callbacks->isSecureAddress(method->addr.addr, method->addr.type, g_generation) &&
-        memcmp(layer2, method->addr.addr, IPOSL_LAYER2_ID_LEN) == 0;
+                    decoded == IPOSL_SUCCESS && callbacks != NULL && callbacks->isSecureAddress != NULL &&
+                    callbacks->isSecureAddress(method->addr.addr, method->addr.type, g_generation) &&
+                    memcmp(layer2, method->addr.addr, IPOSL_LAYER2_ID_LEN) == 0;
     IposlServerPeer *entry = accepted ? FindPeer(&method->addr) : NULL;
     IposlServerPeer *candidate = NULL;
     uint8_t mode = accepted && opcode == IPOSL_OPCODE_CONFIGURE ? method->param.data[10] : 0;
     bool reserved = false;
-    if (accepted && opcode == IPOSL_OPCODE_CONFIGURE &&
-        (mode == 1 || (mode == 3 && g_allowedMode == 3))) {
+    if (accepted && opcode == IPOSL_OPCODE_CONFIGURE && (mode == 1 || (mode == 3 && g_allowedMode == 3))) {
         if (entry != NULL) {
             /* The cached SSAP entry outlives channel release and L3 cleanup.
              * Revalidate its owner before acknowledging a retransmission. */
             int32_t prepared = callbacks->prepareMode(method->addr.addr, mode, g_generation);
             result = prepared == 0 && entry->mode == mode ? 0 : 0xff;
         } else if ((candidate = FreePeer()) != NULL &&
-            callbacks->prepareMode(method->addr.addr, mode, g_generation) == 0) {
+                   callbacks->prepareMode(method->addr.addr, mode, g_generation) == 0) {
             reserved = true;
             result = 0;
         }
     } else if (accepted && opcode == IPOSL_OPCODE_ENABLE && entry != NULL &&
-        memcmp(entry->layer2, layer2, IPOSL_LAYER2_ID_LEN) == 0) {
+               memcmp(entry->layer2, layer2, IPOSL_LAYER2_ID_LEN) == 0) {
         int32_t prepared = callbacks->prepareMode(method->addr.addr, entry->mode, g_generation);
         result = prepared == 0 ? 0 : 0xff;
     }
@@ -232,8 +217,12 @@ static void OnCallMethodAny(int32_t appId, uint16_t requestId,
     } else if (needAuth) {
         (void)NLSTK_SsapServerAuthorizeResult(g_serverAppId, requestId, accepted);
     }
-    if (reserved && !delivered) (void)callbacks->prepareMode(method->addr.addr, 0, g_generation);
-    if (!delivered || result != 0) return;
+    if (reserved && !delivered) {
+        (void)callbacks->prepareMode(method->addr.addr, 0, g_generation);
+    }
+    if (!delivered || result != 0) {
+        return;
+    }
     if (reserved) {
         candidate->used = true;
         candidate->enabled = false;
@@ -249,83 +238,6 @@ static void OnCallMethodAny(int32_t appId, uint16_t requestId,
         entry->enabled = true;
         callbacks->onConfigured(entry->peer, true, 0, entry->mode, g_generation);
     }
-}
-
-static void OnCallMethod(int32_t appId, uint16_t requestId, NLSTK_SsapServerCallMethodRequestInfo_S *method,
-    bool needReturn, bool needAuth)
-{
-    if (g_anyPeer) {
-        OnCallMethodAny(appId, requestId, method, needReturn, needAuth);
-        return;
-    }
-    uint8_t opcode = 0;
-    uint8_t layer2[IPOSL_LAYER2_ID_LEN] = {0};
-    uint8_t response[IPOSL_RESPONSE_LEN] = {0};
-    uint8_t result = 0xFF;
-    bool appMatch = appId == g_serverAppId;
-    bool peerMatch = method != NULL && IsExpectedPeer(&method->addr);
-    /* SSAP resolves the handle to this app's registered method before invoking this callback. The current
-     * callback path does not populate method->uuid, and this private IPoSL app registers exactly one method. */
-    bool methodHandleValid = method != NULL && method->handle != 0;
-    int32_t decodeRet = method == NULL ? IPOSL_ERR_INVALID_PARAM :
-        IposlCodecDecodeRequest(method->param.data, method->param.len, &opcode, layer2);
-    bool accepted = g_serverActive && appMatch && method != NULL && peerMatch && methodHandleValid &&
-        decodeRet == IPOSL_SUCCESS;
-    if (!accepted) {
-        NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] method rejected requestId=%u appId=%d active=%d appMatch=%d "
-            "method=%d handle=%u peerMatch=%d methodHandleValid=%d decodeRet=%d", requestId, appId, g_serverActive,
-            appMatch, method != NULL, method == NULL ? 0 : method->handle, peerMatch, methodHandleValid, decodeRet);
-    } else {
-        NLSTK_LOG_INFO("[IpShare][IPoSL][Server] method request accepted requestId=%u appId=%d opcode=%u", requestId,
-            appId, opcode);
-    }
-    const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
-    accepted = accepted && callbacks != NULL && callbacks->isSecure(g_expectedPeer, g_generation);
-    uint8_t mode = opcode == IPOSL_OPCODE_CONFIGURE && decodeRet == 0 ? method->param.data[10] : 0;
-    bool newReservation = false;
-    if (accepted && opcode == IPOSL_OPCODE_CONFIGURE &&
-        memcmp(layer2, g_expectedPeer, sizeof(g_expectedPeer)) == 0 &&
-        (mode == 1 || (mode == 3 && g_allowedMode == 3))) {
-        if (g_configured) {
-            /* Compatible retransmission is idempotent; changing mode requires stop. */
-            result = mode == g_selectedMode ? 0 : 0xff;
-        } else if (callbacks->prepareMode(g_expectedPeer, mode, g_generation) == 0) {
-            newReservation = true;
-            result = 0;
-        }
-    } else if (accepted && opcode == IPOSL_OPCODE_ENABLE && g_configured &&
-        memcmp(g_configuredLayer2, layer2, sizeof(g_configuredLayer2)) == 0) {
-        result = 0;
-    }
-    if (accepted && opcode == IPOSL_OPCODE_CONFIGURE &&
-        memcmp(layer2, g_expectedPeer, sizeof(g_expectedPeer)) == 0 && mode == 3 && g_allowedMode != 3) {
-        result = 0x07;
-    }
-    bool delivered = false;
-    if (method != NULL && IposlCodecEncodeResponse(opcode, layer2, result, response, sizeof(response)) > 0 &&
-        needReturn) {
-        NLSTK_VariableData_S value = {.len = sizeof(response), .data = response};
-        delivered = NLSTK_SsapServerSendMethodCallRes(g_serverAppId, requestId, &value) == NLSTK_ERRCODE_SUCCESS;
-    } else if (needAuth) {
-        /* Authorization alone never commits a configuration or enables the user plane. */
-        (void)NLSTK_SsapServerAuthorizeResult(g_serverAppId, requestId, accepted);
-    }
-    if (newReservation && !delivered) {
-        (void)callbacks->prepareMode(g_expectedPeer, 0, g_generation);
-    }
-    if (!delivered || result != 0) return;
-    if (newReservation) {
-        memcpy(g_configuredLayer2, layer2, sizeof(g_configuredLayer2));
-        g_selectedMode = mode;
-        g_configured = true;
-    }
-    if (opcode == IPOSL_OPCODE_CONFIGURE && !g_enabled) {
-        callbacks->onConfigured(g_expectedPeer, false, 0, g_selectedMode, g_generation);
-    } else if (opcode == IPOSL_OPCODE_ENABLE && !g_enabled) {
-        g_enabled = true;
-        callbacks->onConfigured(g_expectedPeer, true, 0, g_selectedMode, g_generation);
-    }
-    NLSTK_LOG_INFO("[IpShare][IPoSL][Server] opcode=%u result=%u selectedMode=%u", opcode, result, g_selectedMode);
 }
 
 int32_t IposlServerInitialize(void)
@@ -358,75 +270,47 @@ int32_t IposlServerInitialize(void)
 static int32_t StartAnyOnCp(uint8_t mode, uint32_t capacity, uint64_t generation)
 {
     const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
-    if (callbacks == NULL || callbacks->isSecureAddress == NULL ||
-        g_serverAppId == SSAP_APP_INVALID_ID || g_serverActive ||
-        (mode != 1 && mode != 3) || capacity == 0 || capacity > 32 || generation == 0) {
+    if (callbacks == NULL || callbacks->isSecureAddress == NULL || g_serverAppId == SSAP_APP_INVALID_ID ||
+        g_serverActive || (mode != 1 && mode != 3) || capacity == 0 || capacity > 32 || generation == 0) {
         return IPOSL_ERR_INVALID_PARAM;
     }
     g_peers = (IposlServerPeer *)calloc(capacity, sizeof(*g_peers));
-    if (g_peers == NULL) return IPOSL_ERR_INVALID_STATE;
+    if (g_peers == NULL) {
+        return IPOSL_ERR_INVALID_STATE;
+    }
     g_peerCapacity = capacity;
     g_allowedMode = mode;
     g_generation = generation;
-    g_anyPeer = true;
     g_serverActive = true;
     return IPOSL_SUCCESS;
 }
 
 static void ReleasePeerOnCp(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType)
 {
-    if (peer == NULL || !g_anyPeer) return;
+    if (peer == NULL) {
+        return;
+    }
     SLE_Addr_S addr = {0};
     addr.type = addressType;
     memcpy(addr.addr, peer, IPOSL_LAYER2_ID_LEN);
     IposlServerPeer *entry = FindPeer(&addr);
-    if (entry != NULL) memset(entry, 0, sizeof(*entry));
-}
-
-static int32_t StartOnCp(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType,
-    uint8_t mode, uint64_t generation)
-{
-    if (peer == NULL || g_serverAppId == SSAP_APP_INVALID_ID || g_serverActive) {
-        NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] start rejected peerNull=%d appId=%d active=%d", peer == NULL,
-            g_serverAppId, g_serverActive);
-        return IPOSL_ERR_INVALID_STATE;
+    if (entry != NULL) {
+        memset(entry, 0, sizeof(*entry));
     }
-    (void)memcpy(g_expectedPeer, peer, sizeof(g_expectedPeer));
-    g_expectedAddressType = addressType;
-    g_configured = false;
-    g_allowedMode = mode;
-    g_selectedMode = 0;
-    g_enabled = false;
-    g_generation = generation;
-    g_serverActive = true;
-    NLSTK_LOG_INFO("[IpShare][IPoSL][Server] start completed appId=%d addressType=%u", g_serverAppId, addressType);
-    return IPOSL_SUCCESS;
 }
 
 static void StopOnCp(void)
 {
     bool wasActive = g_serverActive;
-    (void)memset(g_expectedPeer, 0, sizeof(g_expectedPeer));
-    (void)memset(g_configuredLayer2, 0, sizeof(g_configuredLayer2));
-    g_expectedAddressType = 0;
-    g_configured = false;
     g_serverActive = false;
-    g_enabled = false;
-    g_selectedMode = 0;
     g_generation = 0;
     free(g_peers);
     g_peers = NULL;
     g_peerCapacity = 0;
-    g_anyPeer = false;
     NLSTK_LOG_INFO("[IpShare][IPoSL][Server] stop completed wasActive=%d", wasActive);
 }
 
-typedef enum {
-    SERVER_START,
-    SERVER_START_ANY,
-    SERVER_RELEASE_PEER,
-    SERVER_STOP
-} IposlServerOperation;
+typedef enum { SERVER_START_ANY, SERVER_RELEASE_PEER, SERVER_STOP } IposlServerOperation;
 
 typedef struct {
     atomic_int refs;
@@ -462,14 +346,10 @@ static void RunServerTask(void *arg)
 {
     IposlServerTask *task = (IposlServerTask *)arg;
     // A timed-out stop must still run: only CP may free the peer table.
-    if ((task->operation == SERVER_START || task->operation == SERVER_START_ANY) &&
-        atomic_load(&task->cancelled)) {
+    if (task->operation == SERVER_START_ANY && atomic_load(&task->cancelled)) {
         return;
     }
     switch (task->operation) {
-        case SERVER_START:
-            task->result = StartOnCp(task->peer, task->addressType, task->mode, task->generation);
-            break;
         case SERVER_START_ANY:
             task->result = StartAnyOnCp(task->mode, task->capacity, task->generation);
             break;
@@ -487,10 +367,10 @@ static void RunServerTask(void *arg)
     }
 }
 
-static int32_t PostServerTask(IposlServerOperation operation, const uint8_t *peer,
-    uint8_t addressType, uint8_t mode, uint32_t capacity, uint64_t generation)
+static int32_t PostServerTask(IposlServerOperation operation, const uint8_t *peer, uint8_t addressType, uint8_t mode,
+                              uint32_t capacity, uint64_t generation)
 {
-    if (operation == SERVER_START || operation == SERVER_START_ANY || operation == SERVER_STOP) {
+    if (operation == SERVER_START_ANY || operation == SERVER_STOP) {
         atomic_store(&g_serverDrained, false);
     }
     IposlServerTask *task = (IposlServerTask *)SDF_MemAlloc(sizeof(*task));
@@ -526,21 +406,10 @@ int32_t IposlServerStartAny(uint8_t mode, uint32_t capacity, uint64_t generation
     return PostServerTask(SERVER_START_ANY, NULL, 0, mode, capacity, generation);
 }
 
-int32_t IposlServerStart(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType,
-    uint8_t mode, uint64_t generation)
-{
-    if (peer == NULL) {
-        return IPOSL_ERR_INVALID_PARAM;
-    }
-    atomic_store(&g_publishedGeneration, generation);
-    return PostServerTask(SERVER_START, peer, addressType, mode, 0, generation);
-}
-
 int32_t IposlServerReleasePeer(const uint8_t peer[IPOSL_LAYER2_ID_LEN], uint8_t addressType)
 {
     if (peer != NULL) {
-        return PostServerTask(SERVER_RELEASE_PEER, peer, addressType, 0, 0,
-            atomic_load(&g_publishedGeneration));
+        return PostServerTask(SERVER_RELEASE_PEER, peer, addressType, 0, 0, atomic_load(&g_publishedGeneration));
     }
     return IPOSL_ERR_INVALID_PARAM;
 }
@@ -562,8 +431,7 @@ void IposlServerDeinit(void)
     if (g_serverAppId != SSAP_APP_INVALID_ID) {
         NLSTK_Errcode_E clearRet = NLSTK_SsapServerClearServices(g_serverAppId);
         if (clearRet != NLSTK_ERRCODE_SUCCESS) {
-            NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] clear services failed appId=%d ret=%d", g_serverAppId,
-                clearRet);
+            NLSTK_LOG_ERROR("[IpShare][IPoSL][Server] clear services failed appId=%d ret=%d", g_serverAppId, clearRet);
         }
         NLSTK_SsapServerDeregisterApplication(g_serverAppId);
         NLSTK_LOG_INFO("[IpShare][IPoSL][Server] deregistered appId=%d", g_serverAppId);

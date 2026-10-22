@@ -29,8 +29,7 @@ class NearlinkIpShareStub : public IRemoteStub<INearlinkIpShare> {
 public:
     NearlinkIpShareStub();
     ~NearlinkIpShareStub() override = default;
-    int32_t OnRemoteRequest(uint32_t code, MessageParcel &data, MessageParcel &reply,
-        MessageOption &option) override;
+    int32_t OnRemoteRequest(uint32_t code, MessageParcel &data, MessageParcel &reply, MessageOption &option) override;
 
 private:
     using Handler = int32_t (*)(NearlinkIpShareStub *, MessageParcel &, MessageParcel &);
@@ -39,20 +38,20 @@ private:
     static int32_t IsPeerSupportedInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
     static int32_t StartGatewayAnyInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
     static int32_t GetSupportedMaxTerminalsInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
-    static int32_t StartGatewayInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
     static int32_t StartTerminalInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
     static int32_t StopInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
     static int32_t GetStatusInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
     static int32_t RegisterObserverInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
     static int32_t UnregisterObserverInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
 
-    static int32_t QueryNearlinkIpShareCapabilitiesInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
-    static int32_t StartNearlinkGatewayWithModeInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
-    static int32_t StartNearlinkTerminalWithModeInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply);
+    static int32_t QueryNearlinkIpShareCapabilitiesInner(NearlinkIpShareStub *stub, MessageParcel &data,
+                                                         MessageParcel &reply);
+    static int32_t StartNearlinkTerminalWithModeInner(NearlinkIpShareStub *stub, MessageParcel &data,
+                                                      MessageParcel &reply);
     static int32_t UpdateValidatedAddressInner(NearlinkIpShareStub *, MessageParcel &, MessageParcel &);
     static int32_t CompleteGatewayPeerReleaseInner(NearlinkIpShareStub *, MessageParcel &, MessageParcel &);
     std::map<uint32_t, HandlerWithPermission> memberFuncMap_;
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // NEARLINK_IPSHARE_STUB_H
+} // namespace OHOS::Nearlink
+#endif // NEARLINK_IPSHARE_STUB_H

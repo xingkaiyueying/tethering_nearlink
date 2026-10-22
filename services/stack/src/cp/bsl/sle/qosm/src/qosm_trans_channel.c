@@ -137,20 +137,6 @@ uint32_t QOSM_RegisterIpSharePeerCallbacks(QOSM_IpSharePeerCheck check, QOSM_IpS
     return ret == CP_OK ? QOSM_SUCCESS : QOSM_POST_TASK_ERR;
 }
 
-static void QOSM_RegisterIpSharePeerCheckProc(void *arg)
-{
-    g_ipSharePeerCheck = *(QOSM_IpSharePeerCheck *)arg;
-}
-
-uint32_t QOSM_RegisterIpSharePeerCheck(QOSM_IpSharePeerCheck callback)
-{
-    QOSM_IpSharePeerCheck *copy = SDF_MemAlloc(sizeof(*copy));
-    QOSM_CHECK_RETURN_RET(copy != NULL, QOSM_MALLOC_ERR, "malloc failed.");
-    *copy = callback;
-    uint32_t ret = CP_PostTask(QOSM_RegisterIpSharePeerCheckProc, copy, SDF_MemFree);
-    return ret == CP_OK ? QOSM_SUCCESS : QOSM_POST_TASK_ERR;
-}
-
 static QOSM_SleLogicLinkParams_S g_sleLogicLinkParams[QOSM_TRANS_CHANNEL_SLQI_MAX] = {
     {
         { QOSM_SLE_CONN_NORMAL_SPEED_INTERAL },
@@ -824,9 +810,8 @@ static bool QOSM_CheckIpSharePeer(uint16_t lcid, uint16_t srcPort, uint16_t dstP
     if (srcPort != ipSharePort || dstPort != ipSharePort || g_ipSharePeerCheck == NULL) {
         return false;
     }
-    CM_LogicLink_S link = { 0 };
-    return CM_GetLogicLinkByLcid(lcid, &link) == CM_SUCCESS &&
-        g_ipSharePeerCheck(&link.addr, srcPort);
+    CM_LogicLink_S link = {0};
+    return CM_GetLogicLinkByLcid(lcid, &link) == CM_SUCCESS && g_ipSharePeerCheck(&link.addr, srcPort);
 }
 
 static void QOSM_CancelIpSharePeer(uint16_t lcid, uint16_t srcPort, uint16_t dstPort)

@@ -19,8 +19,8 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
-#include <thread>
 #include <string>
+#include <thread>
 
 namespace OHOS::Nearlink {
 
@@ -39,16 +39,16 @@ public:
     static bool ParseIpv6Evidence(const std::string &text, uint32_t index, uint8_t address[16],
                                   const std::string &ifaceName = "sleip0");
 
-  private:
+private:
     void ReadLoop();
 
     mutable std::mutex mutex_;
-    int fd_ {-1};
-    std::atomic_bool running_ {false};
+    int fd_{-1};
+    std::atomic_bool running_{false};
     PacketCallback callback_;
     std::thread reader_;
     std::string ifaceName_;
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // NEARLINK_IPSHARE_TUN_H
+} // namespace OHOS::Nearlink
+#endif // NEARLINK_IPSHARE_TUN_H

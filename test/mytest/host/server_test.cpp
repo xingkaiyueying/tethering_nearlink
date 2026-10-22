@@ -46,26 +46,26 @@ const IposlProfileCallbacks *IposlGetCallbacks()
 int main()
 {
     uint8_t peer[6] = {2,1,2,3,4,5}, bytes[11];
-    assert(IposlServerInitialize() == 0 && IposlServerStart(peer,0,3,55) == 0);
+    assert(IposlServerInitialize() == 0 && IposlServerStartAny(3,1,55) == 0);
     NLSTK_SsapServerCallMethodRequestInfo_S request = {}; memcpy(request.addr.addr,peer,6);
     request.handle=4; request.param={11,bytes}; IposlCodecEncodeConfigMode(peer,3,bytes,11);
-    reserveFails=true; OnCallMethod(7,1,&request,true,false); assert(wireResult==255 && !g_configured);
+    reserveFails=true; OnCallMethod(7,1,&request,true,false); assert(wireResult==255 && !g_peers[0].used);
     reserveFails=false; sendResult=-1; OnCallMethod(7,2,&request,true,false);
-    assert(!g_configured && rolledBack==1 && notified==0);
+    assert(!g_peers[0].used && rolledBack==1 && notified==0);
     sendResult=0; OnCallMethod(7,3,&request,true,false);
-    assert(wireResult==0 && g_configured && g_selectedMode==3 && notified==1);
-    int count=prepared; OnCallMethod(7,4,&request,true,false); assert(prepared==count); // no second reservation
-    bytes[10]=1; OnCallMethod(7,5,&request,true,false); assert(wireResult==255 && g_selectedMode==3);
+    assert(wireResult==0 && g_peers[0].used && g_peers[0].mode==3 && notified==1);
+    int count=prepared; OnCallMethod(7,4,&request,true,false); assert(prepared==count+1); // revalidate the existing owner
+    bytes[10]=1; OnCallMethod(7,5,&request,true,false); assert(wireResult==255 && g_peers[0].mode==3);
     request.param.len=7; IposlCodecEncodeOpenRequest(peer,bytes,11);
-    secure=false; OnCallMethod(7,6,&request,true,false); assert(wireResult==255 && !g_enabled);
-    secure=true; OnCallMethod(7,7,&request,true,false); assert(g_enabled && wireResult==0);
+    secure=false; OnCallMethod(7,6,&request,true,false); assert(wireResult==255 && !g_peers[0].enabled);
+    secure=true; OnCallMethod(7,7,&request,true,false); assert(g_peers[0].enabled && wireResult==0);
     count=notified; OnCallMethod(7,8,&request,true,false); assert(notified==count);
-    IposlServerStop(); assert(!g_enabled && !g_configured);
-    assert(IposlServerStart(peer,0,1,55)==0);
+    IposlServerStop(); assert(g_peers==nullptr && !g_serverActive);
+    assert(IposlServerStartAny(1,1,55)==0);
     request.param.len=11; IposlCodecEncodeConfigMode(peer,3,bytes,11);
-    OnCallMethod(7,9,&request,true,false); assert(wireResult==7 && !g_configured);
+    OnCallMethod(7,9,&request,true,false); assert(wireResult==7 && !g_peers[0].used);
     bytes[10]=1; request.addr.addr[5]++; OnCallMethod(7,10,&request,true,false); assert(wireResult==255);
-    request.addr.addr[5]--; OnCallMethod(7,11,&request,true,false); assert(wireResult==0 && g_selectedMode==1);
+    request.addr.addr[5]--; OnCallMethod(7,11,&request,true,false); assert(wireResult==0 && g_peers[0].mode==1);
     IposlServerStop();
     assert(IposlServerStartAny(3,1,55)==0);
     request.param.len=11; IposlCodecEncodeConfigMode(peer,3,bytes,11);

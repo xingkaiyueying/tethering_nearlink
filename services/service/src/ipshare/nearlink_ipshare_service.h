@@ -19,9 +19,9 @@
 #include <chrono>
 #include <condition_variable>
 #include <memory>
-#include <vector>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "i_nearlink_ipshare_observer.h"
 #include "nearlink_def.h"
@@ -39,7 +39,6 @@ public:
     void ResetForAdapterStop();
     int32_t UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address);
     int32_t IsPeerSupported(const std::string &peerAddress, bool &supported);
-    int32_t StartGateway(const std::string &peerAddress);
     int32_t StartGatewayAny(int32_t mode, int32_t maxTerminals);
     int32_t GetSupportedMaxTerminals() const;
     int32_t CompleteGatewayPeerRelease(uint64_t generation);
@@ -50,30 +49,29 @@ public:
     int32_t RegisterObserver(const sptr<INearlinkIpShareObserver> &observer);
     int32_t UnregisterObserver();
     int32_t QueryNearlinkIpShareCapabilities(const std::string &peerAddress, NearlinkIpShareCapabilities &capabilities);
-    int32_t StartNearlinkGatewayWithMode(const std::string &peerAddress, int32_t mode);
     int32_t StartNearlinkTerminalWithMode(const std::string &peerAddress, int32_t mode);
-
 
     static bool CanSend(uint16_t lcid, uint8_t tcid, uint8_t pi, uint64_t generation);
 
-
 private:
     NearlinkIpShareService() = default;
-    static void OnPeerSupported(const uint8_t peer[6], bool supported, int32_t error, uint8_t peerModes, bool known, uint64_t generation);
+    static void OnPeerSupported(const uint8_t peer[6], bool supported, int32_t error, uint8_t peerModes, bool known,
+                                uint64_t generation);
     static void OnPeerCapabilities(const uint8_t peer[6], uint8_t peerModes, uint64_t generation);
     static void OnConfigured(const uint8_t peer[6], bool opened, int32_t error, uint8_t mode, uint64_t generation);
-    void HandlePeerSupported(const uint8_t peer[6], bool supported, int32_t error, uint8_t peerModes, bool known, uint64_t generation);
+    void HandlePeerSupported(const uint8_t peer[6], bool supported, int32_t error, uint8_t peerModes, bool known,
+                             uint64_t generation);
     void HandlePeerCapabilities(const uint8_t peer[6], uint8_t peerModes, uint64_t generation);
     void HandleConfigured(const uint8_t peer[6], bool opened, int32_t error, uint8_t mode, uint64_t generation);
     void HandleChannelState(bool established, int32_t error);
     void HandleGatewayPeerChannel(const uint8_t peer[6], uint64_t epoch, bool established, int32_t error);
     void ReleaseGatewayPeer(const uint8_t peer[6], uint64_t epoch);
     void CheckGatewayPeerSetupTimeout(const std::array<uint8_t, 6> &peer, uint64_t epoch, uint64_t generation);
-    void ScheduleGatewayPeerSetupTimeout(const std::array<uint8_t, 6> &peer, uint64_t epoch,
-        uint64_t generation, uint64_t delayMs);
+    void ScheduleGatewayPeerSetupTimeout(const std::array<uint8_t, 6> &peer, uint64_t epoch, uint64_t generation,
+                                         uint64_t delayMs);
     int32_t ValidateSecurePeer(const std::string &peerAddress, uint8_t peer[6], uint8_t &addressType) const;
-    int32_t BeginRole(NearlinkIpShareRole role, const std::string &peerAddress,
-        const uint8_t peer[6], uint8_t addressType, int32_t mode, uint64_t &generation);
+    int32_t BeginTerminal(const std::string &peerAddress, const uint8_t peer[6], uint8_t addressType, int32_t mode,
+                          uint64_t &generation);
     void SetState(NearlinkIpShareState state, const std::string &errorStage = "", int32_t error = 0);
     void NotifyStatus(const NearlinkIpShareStatus &status, const sptr<INearlinkIpShareObserver> &observer) const;
     static int32_t PrepareMode(const uint8_t peer[6], uint8_t mode, uint64_t generation);
@@ -98,7 +96,7 @@ private:
     std::vector<std::unique_ptr<GatewayPeer>> gatewayPeers_;
     bool gatewayAny_{false};
     int32_t maxTerminals_{0};
-    uint64_t generationCounter_ {0};
+    uint64_t generationCounter_{0};
     void StopNow();
 
     std::mutex lifecycleMutex_;
@@ -106,13 +104,13 @@ private:
     std::condition_variable probeCondition_;
     NearlinkIpShareStatus status_;
     sptr<INearlinkIpShareObserver> observer_;
-    uint8_t peer_[6] {};
-    uint8_t addressType_ {0};
-    uint8_t supportedPeer_[6] {};
-    bool initialized_ {false};
-    bool probeInProgress_ {false};
-    bool peerSupported_ {false};
+    uint8_t peer_[6]{};
+    uint8_t addressType_{0};
+    uint8_t supportedPeer_[6]{};
+    bool initialized_{false};
+    bool probeInProgress_{false};
+    bool peerSupported_{false};
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // NEARLINK_IPSHARE_SERVICE_H
+} // namespace OHOS::Nearlink
+#endif // NEARLINK_IPSHARE_SERVICE_H

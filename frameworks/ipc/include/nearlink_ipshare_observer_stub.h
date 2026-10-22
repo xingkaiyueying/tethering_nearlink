@@ -22,9 +22,8 @@ namespace OHOS::Nearlink {
 
 class NearlinkIpShareObserverStub : public IRemoteStub<INearlinkIpShareObserver> {
 public:
-    int32_t OnRemoteRequest(uint32_t code, MessageParcel &data, MessageParcel &reply,
-        MessageOption &option) override;
+    int32_t OnRemoteRequest(uint32_t code, MessageParcel &data, MessageParcel &reply, MessageOption &option) override;
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // NEARLINK_IPSHARE_OBSERVER_STUB_H
+} // namespace OHOS::Nearlink
+#endif // NEARLINK_IPSHARE_OBSERVER_STUB_H

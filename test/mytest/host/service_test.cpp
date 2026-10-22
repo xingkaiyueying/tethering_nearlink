@@ -31,7 +31,6 @@ extern "C" int32_t IposlProfileReleaseServerPeerChecked(const uint8_t *,uint8_t)
 extern "C" int32_t IposlProfileStartServerAny(uint8_t,uint32_t capacity,uint64_t g)
 { profileCapacity=capacity; profileGeneration=g; ++starts; return 0; }
 extern "C" void IposlProfileReleaseServerPeer(const uint8_t *,uint8_t) {}
-extern "C" int32_t IposlProfileStartServer(const uint8_t *,uint8_t,uint8_t,uint64_t g) { profileGeneration=g; ++starts; return 0; }
 extern "C" int32_t IposlProfileStartTerminal(const uint8_t *,uint8_t,const uint8_t *,uint8_t,uint64_t g)
 { profileGeneration=g; ++starts; return 0; }
 extern "C" int32_t IposlProfileProbePeer(const uint8_t *,uint8_t,uint8_t,uint64_t) { return 0; }
@@ -133,30 +132,11 @@ int main()
     assert(!profileCallbacks.canSend(3,4,1,first));
     rsp.status=QOSM_TRANS_CHANNEL_RELEASED; c.HandleChannelStatus(&rsp); DrainTasks(); s.GetStatus(status);
     assert(status.state==NearlinkIpShareState::IDLE);
-    assert(s.StartNearlinkGatewayWithMode(address,3)==0); DrainTasks();
+    assert(s.StartGatewayAny(3,1)==0); DrainTasks();
     uint64_t next=profileGeneration; assert(next>first);
-    profileCallbacks.onPeerCapabilities(peer,3,first); DrainTasks();
-    assert(!s.capabilities_.peerCapabilityKnown);
     profileCallbacks.onConfigured(peer,true,0,3,first); DrainTasks(); s.GetStatus(status);
-    assert(status.state==NearlinkIpShareState::IFACE_READY && !c.enabled_);
+    assert(status.state==NearlinkIpShareState::SERVING_NO_UPSTREAM && status.peerLinks.empty());
     assert(profileCallbacks.prepareMode(peer,3,first)!=0);
-    assert(profileCallbacks.prepareMode(peer,3,next)==0);
-    profileCallbacks.onConfigured(peer,false,0,3,next); profileCallbacks.onConfigured(peer,true,0,3,next); DrainTasks();
-    SLE_Addr_S peerAddrForAdmission = {};
-    memcpy(peerAddrForAdmission.addr, peer, 6);
-    auto otherAddrForAdmission = peerAddrForAdmission;
-    otherAddrForAdmission.addr[5] ^= 1;
-    assert(!c.IsAcceptingPort(&otherAddrForAdmission, c.IP_SHARE_PORT));
-    assert(c.IsAcceptingPort(&peerAddrForAdmission, c.IP_SHARE_PORT));
-    assert(c.channelPending_ && !c.IsAcceptingPort(&peerAddrForAdmission, c.IP_SHARE_PORT));
-    supported=false;
-    assert(s.IsPeerSupported(address,supported)==0 && supported);
-    assert(s.QueryNearlinkIpShareCapabilities(address,capabilities)==0 && capabilities.identifierPresent);
-    assert(!capabilities.peerCapabilityKnown && capabilities.peerModes.empty());
-    rsp.status=QOSM_TRANS_CHANNEL_ESTABLISHED; c.HandleChannelStatus(&rsp); DrainTasks();
-    rsp.status=QOSM_TRANS_CHANNEL_RELEASED; c.HandleChannelStatus(&rsp); DrainTasks(); s.GetStatus(status);
-    assert(status.generation>next && status.serviceReady && status.selectedMode==NearlinkIpShareMode::NONE);
-    assert(c.tun_.IsOpen() && !c.enabled_ && !registered[1] && !registered[2]);
     assert(s.Stop()==0); DrainTasks();
     // Stop before queued start: no profile work or stale start survives.
     int previous=starts; assert(s.StartTerminal(address)==0); assert(s.Stop()==0); DrainTasks();
