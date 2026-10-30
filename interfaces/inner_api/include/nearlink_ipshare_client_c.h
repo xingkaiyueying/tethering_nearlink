@@ -61,16 +61,15 @@ typedef struct NlIpShareIpv6AddressC {
 int32_t NlIpShareUpdateValidatedAddress(const NlIpShareIpv6AddressC *address);
 
 int32_t NlIpShareQueryCapabilities(const char *peerAddress, NlIpShareCapabilitiesC *capabilities);
-int32_t NlIpShareStartGatewayWithMode(const char *peerAddress, int32_t mode);
 int32_t NlIpShareStartTerminalWithMode(const char *peerAddress, int32_t mode);
 
 int32_t NlIpShareIsPeerSupported(const char *peerAddress, int32_t *supported);
-int32_t NlIpShareStartGateway(const char *peerAddress);
 int32_t NlIpShareStartTerminal(const char *gatewayAddress);
+int32_t NlIpShareStartGatewayAny(int32_t mode, int32_t maxTerminals);
 int32_t NlIpShareStop(void);
 int32_t NlIpShareGetStatus(NlIpShareStatusC *status);
 
 #ifdef __cplusplus
 }
 #endif
-#endif  // NEARLINK_IPSHARE_CLIENT_C_H
+#endif // NEARLINK_IPSHARE_CLIENT_C_H

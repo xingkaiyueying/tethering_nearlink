@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import os
 
 p = argparse.ArgumentParser()
 p.add_argument('--cxx', default='g++')
@@ -23,8 +24,17 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
                    repo / 'services/stack/src/cp/bsl/sle/qosm/interface/qosm_trans_channel.h',
                    repo / 'ipc_parcel/parcel/nearlink_ipshare_status.h',
                    repo / 'ipc_parcel/parcel/nearlink_ipshare_status.cpp',
+                   repo / 'interfaces/def/nearlink_def.h',
+                   repo / 'interfaces/def/nearlink_def_types.h',
                    repo / 'ipc_parcel/interface/nearlink_service_ipc_interface_code.h']:
         shutil.copyfile(source, out / source.name)
+    before_ref = os.environ.get('P3_RESTART_BEFORE_REF')
+    if before_ref:
+        for name in ('iposl_server.c', 'iposl_client.c'):
+            relative = (profile / 'src' / name).relative_to(repo).as_posix()
+            payload = subprocess.check_output(['git', '-c', f'safe.directory={repo.as_posix()}',
+                '-C', str(repo), 'show', before_ref + ':' + relative])
+            (out / name).write_bytes(payload)
     # Codec is C in the stack, while the probe compiles as C++.
     subprocess.run([a.cc, '-std=c11', '-Wall', '-Wextra', '-Werror', '-I'+str(out),
                     '-c', str(out/'iposl_codec.c'), '-o', str(out/'codec.o')], check=True)
@@ -32,6 +42,40 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
         if source.stem == 'service_test':
             for name in ('nearlink_ipshare_service.cpp', 'nearlink_ipshare_service.h'):
                 shutil.copyfile(channel / name, out / name)
+            packet_before = os.environ.get('P3_PACKET_GATE_BEFORE_REF')
+            if packet_before:
+                signature = 'bool NearlinkIpShareService::CanSend('
+                def packet_gate(text):
+                    start = text.index(signature)
+                    end = text.index('{', start) + 1
+                    depth = 1
+                    while depth:
+                        depth += (text[end] == '{') - (text[end] == '}')
+                        end += 1
+                    return text[start:end]
+                path = 'services/service/src/ipshare/nearlink_ipshare_service.cpp'
+                old = subprocess.check_output(['git', '-c', f'safe.directory={repo.as_posix()}',
+                    '-C', str(repo), 'show', packet_before + ':' + path]).decode('utf-8')
+                current = (out / 'nearlink_ipshare_service.cpp').read_text(encoding='utf-8')
+                (out / 'nearlink_ipshare_service.cpp').write_text(
+                    current.replace(packet_gate(current), packet_gate(old)), encoding='utf-8')
+            setup_before = os.environ.get('P3_PEER_SETUP_BEFORE_REF')
+            if setup_before:
+                signature = 'int32_t NearlinkIpShareService::PrepareMode('
+                def body(text):
+                    start = text.index(signature)
+                    end = text.index('{', start) + 1
+                    depth = 1
+                    while depth:
+                        depth += (text[end] == '{') - (text[end] == '}')
+                        end += 1
+                    return text[start:end]
+                path = 'services/service/src/ipshare/nearlink_ipshare_service.cpp'
+                old = subprocess.check_output(['git', '-c', f'safe.directory={repo.as_posix()}',
+                    '-C', str(repo), 'show', setup_before + ':' + path]).decode('utf-8')
+                current = (out / 'nearlink_ipshare_service.cpp').read_text(encoding='utf-8')
+                (out / 'nearlink_ipshare_service.cpp').write_text(current.replace(body(current), body(old)),
+                    encoding='utf-8')
         exe = out / (source.stem + '.exe')
         subprocess.run([a.cxx, '-std=c++17', '-pthread', '-I'+str(out), str(source), str(out/'nearlink_ipshare_ipv6.cpp'), '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True)
@@ -58,3 +102,4 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
     from probe_syntax import check_probe
     check_probe(a.cxx, repo, syntax / 'probe')
     print('native_probe_host_syntax=PASS (Linux/token SDK boundary stubbed)', flush=True)
+    subprocess.run([__import__('sys').executable, str(here / 'tun_close_host_check.py'), a.cxx], check=True)

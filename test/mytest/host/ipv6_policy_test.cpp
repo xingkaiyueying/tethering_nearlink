@@ -58,7 +58,9 @@ int main()
     assert(accept(Na(Global(1), Group(1)), false)); // peer owner may be learned from NA during local DAD
     assert(!accept(Echo(Global(1), Global(1)), true));
     policy.Reset(); assert(accept(Ra(), false)); assert(accept(Dad(Global(2)), true));
-    policy.Expire(62); assert(!accept(Echo(Global(2), Global(1)), true, 62)); // silence cannot confirm
+    policy.Expire(62);
+    assert(!policy.Mappings().back().confirmed); // silence cannot confirm or erase valid prefix DAD
+    assert(accept(Echo(Global(2), Global(1)), true, 62)); // checksummed first data can still confirm
     policy.Reset(); assert(accept(Ra(), false)); assert(accept(Dad(Global(2)), true));
     assert(accept(Echo(Global(2), Global(1)), true));
     policy.Expire(32); assert(policy.Mappings().back().preferredUntil == 31);
@@ -81,5 +83,15 @@ int main()
     assert(accept(rs, true));
     auto dadOption = Dad(Lla(3)); auto original = dadOption;
     assert(Policy::AddLayer2Option(dadOption, terminalId) && dadOption == original);
+    Policy other;
+    auto otherRa=Ra();otherRa[79]=2;Checksum(otherRa);
+    assert(other.Authorize(otherRa.data(),otherRa.size(),false,gatewayId,1));
+    assert(!other.Authorize(dad.data(),dad.size(),true,terminalId,1));
+    auto otherAddress=Global(2);otherAddress[7]=2;
+    auto otherDad=Dad(otherAddress);
+    assert(other.Authorize(otherDad.data(),otherDad.size(),true,terminalId,1));
+    auto otherEcho=Echo(otherAddress,Global(1));
+    assert(other.Authorize(otherEcho.data(),otherEcho.size(),true,terminalId,1));
+    assert(!accept(otherEcho,true)); // a second link cannot learn through the first peer's policy
     std::cout << "IPv6 control, malformed packets, DAD conflict, first-source, capacity, lifetimes PASS\n";
 }

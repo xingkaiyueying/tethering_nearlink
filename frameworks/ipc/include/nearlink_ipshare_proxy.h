@@ -27,22 +27,23 @@ public:
 
     int32_t UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address) override;
     int32_t IsPeerSupported(const std::string &peerAddress, bool &supported) override;
-    int32_t StartGateway(const std::string &peerAddress) override;
+    int32_t StartGatewayAny(int32_t mode, int32_t maxTerminals) override;
+    int32_t GetSupportedMaxTerminals() override;
     int32_t StartTerminal(const std::string &gatewayAddress) override;
     int32_t Stop() override;
     int32_t GetStatus(NearlinkIpShareStatus &status) override;
     int32_t RegisterObserver(const sptr<INearlinkIpShareObserver> &observer) override;
     int32_t UnregisterObserver() override;
-    int32_t QueryNearlinkIpShareCapabilities(const std::string &peerAddress, NearlinkIpShareCapabilities &capabilities) override;
-    int32_t StartNearlinkGatewayWithMode(const std::string &peerAddress, int32_t mode) override;
+    int32_t QueryNearlinkIpShareCapabilities(const std::string &peerAddress,
+                                             NearlinkIpShareCapabilities &capabilities) override;
     int32_t StartNearlinkTerminalWithMode(const std::string &peerAddress, int32_t mode) override;
-
 
 private:
     int32_t Transact(uint32_t code, MessageParcel &data, MessageParcel &reply);
     int32_t AddressCommand(uint32_t code, const std::string &address);
     static inline BrokerDelegator<NearlinkIpShareProxy> delegator_;
+    int32_t CompleteGatewayPeerRelease(uint64_t generation) override;
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // NEARLINK_IPSHARE_PROXY_H
+} // namespace OHOS::Nearlink
+#endif // NEARLINK_IPSHARE_PROXY_H

@@ -14,18 +14,20 @@
  */
 #include "nearlink_ipshare_tun.h"
 
+#include <algorithm>
+#include <arpa/inet.h>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
-#include <sstream>
 #include <iomanip>
-#include <arpa/inet.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
 #include <poll.h>
-#include <sys/socket.h>
+#include <sstream>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include "log.h"
@@ -33,7 +35,6 @@
 namespace OHOS::Nearlink {
 namespace {
 constexpr char IP_SHARE_TUN_DEVICE[] = "/dev/tun";
-constexpr char IP_SHARE_IFACE[] = "sleip0";
 constexpr size_t IP_SHARE_PACKET_MAX = 1500;
 
 int32_t SetInterfaceUp(const char *ifname)
@@ -77,12 +78,16 @@ NearlinkIpShareTun::~NearlinkIpShareTun()
     Close();
 }
 
-int32_t NearlinkIpShareTun::Open(const PacketCallback &callback)
+int32_t NearlinkIpShareTun::Open(const PacketCallback &callback, const std::string &ifaceName)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (fd_ >= 0) {
         HILOGI("[IpShare][Tun] open skipped: interface already open");
         return 0;
+    }
+    if (ifaceName.size() <= 5 || ifaceName.size() >= IFNAMSIZ || ifaceName.compare(0, 5, "sleip") != 0 ||
+        !std::all_of(ifaceName.begin() + 5, ifaceName.end(), [](char ch) { return ch >= '0' && ch <= '9'; })) {
+        return -EINVAL;
     }
     if (!callback) {
         HILOGE("[IpShare][Tun] open failed: packet callback is null");
@@ -95,7 +100,7 @@ int32_t NearlinkIpShareTun::Open(const PacketCallback &callback)
     }
     struct ifreq request = {};
     request.ifr_flags = IFF_TUN | IFF_NO_PI;
-    (void)strncpy(request.ifr_name, IP_SHARE_IFACE, IFNAMSIZ - 1);
+    (void)strncpy(request.ifr_name, ifaceName.c_str(), IFNAMSIZ - 1);
     if (ioctl(fd, TUNSETIFF, &request) < 0) {
         int error = errno;
         (void)close(fd);
@@ -108,10 +113,11 @@ int32_t NearlinkIpShareTun::Open(const PacketCallback &callback)
         return upRet;
     }
     callback_ = callback;
+    ifaceName_ = ifaceName;
     fd_ = fd;
     running_.store(true);
     reader_ = std::thread(&NearlinkIpShareTun::ReadLoop, this);
-    HILOGI("[IpShare][Tun] interface opened name=%{public}s flags=IFF_TUN|IFF_NO_PI", IP_SHARE_IFACE);
+    HILOGI("[IpShare][Tun] interface opened name=%{public}s flags=IFF_TUN|IFF_NO_PI", ifaceName.c_str());
     return 0;
 }
 
@@ -124,11 +130,13 @@ void NearlinkIpShareTun::Close()
         fd = fd_;
         fd_ = -1;
     }
-    if (fd >= 0) {
-        (void)close(fd);
-    }
     if (reader_.joinable()) {
         reader_.join();
+    }
+    // The reader can still hold this descriptor in poll/read. Keep it alive
+    // until the nonblocking reader exits, avoiding EBADF and descriptor reuse.
+    if (fd >= 0) {
+        (void)close(fd);
     }
     std::lock_guard<std::mutex> lock(mutex_);
     callback_ = nullptr;
@@ -138,12 +146,10 @@ void NearlinkIpShareTun::Close()
 int32_t NearlinkIpShareTun::Write(const uint8_t *data, uint16_t length)
 {
     if (data == nullptr || length == 0) {
-        HILOGE("[DHCP][IpShare][Tun] write rejected: invalid packet");
         return -EINVAL;
     }
     std::lock_guard<std::mutex> lock(mutex_);
     if (fd_ < 0) {
-        HILOGE("[DHCP][IpShare][Tun] write failed: interface is closed");
         return -ENODEV;
     }
     ssize_t written = write(fd_, data, length);
@@ -152,8 +158,6 @@ int32_t NearlinkIpShareTun::Write(const uint8_t *data, uint16_t length)
         return 0;
     }
     int32_t ret = written < 0 ? -errno : -EIO;
-    HILOGE("[DHCP][IpShare][Tun] write failed expected=%{public}u written=%{public}zd ret=%{public}d", length, written,
-           ret);
     return ret;
 }
 
@@ -163,34 +167,58 @@ bool NearlinkIpShareTun::IsOpen() const
     return fd_ >= 0;
 }
 
-bool NearlinkIpShareTun::IsIpv6AddressUsable(const uint8_t address[16])
+bool NearlinkIpShareTun::IsIpv6AddressUsable(const uint8_t address[16], const std::string &ifaceName)
 {
     std::ostringstream expected;
-    for (size_t i = 0; i < 16; ++i) expected << std::hex << std::setfill('0') << std::setw(2) << unsigned(address[i]);
+    for (size_t i = 0; i < 16; ++i) {
+        expected << std::hex << std::setfill('0') << std::setw(2) << unsigned(address[i]);
+    }
     std::ifstream input("/proc/net/if_inet6");
     std::string text, iface;
     unsigned index, prefix, scope, flags;
     while (input >> text >> std::hex >> index >> prefix >> scope >> flags >> iface) {
         // IFA_F_TENTATIVE, IFA_F_DADFAILED and optimistic addresses cannot originate business traffic.
-        if (iface == IP_SHARE_IFACE && text == expected.str()) return (flags & (0x40 | 0x08 | 0x04)) == 0;
+        if (iface == ifaceName && text == expected.str()) {
+            return (flags & (0x40 | 0x08 | 0x04)) == 0;
+        }
     }
     return false;
 }
 
-bool NearlinkIpShareTun::ParseIpv6Evidence(const std::string &text, uint32_t index, uint8_t address[16])
+bool NearlinkIpShareTun::ParseIpv6Evidence(const std::string &text, uint32_t index, uint8_t address[16],
+                                           const std::string &ifaceName)
 {
-    if (inet_pton(AF_INET6, text.c_str(), address) != 1) return false;
+    if (inet_pton(AF_INET6, text.c_str(), address) != 1) {
+        return false;
+    }
     int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) return false;
-    ifreq request{}; strncpy(request.ifr_name, IP_SHARE_IFACE, IFNAMSIZ - 1);
+    if (fd < 0) {
+        return false;
+    }
+    ifreq request{};
+    strncpy(request.ifr_name, ifaceName.c_str(), IFNAMSIZ - 1);
     bool valid = ioctl(fd, SIOCGIFINDEX, &request) == 0 && static_cast<uint32_t>(request.ifr_ifindex) == index;
-    close(fd); return valid;
+    close(fd);
+    return valid;
 }
 
 void NearlinkIpShareTun::ReadLoop()
 {
     uint8_t packet[IP_SHARE_PACKET_MAX + 1] = {0};
     HILOGI("[IpShare][Tun] read loop started");
+    uint64_t errors = 0;
+    uint64_t reportedErrors = 0;
+    std::chrono::steady_clock::time_point lastError{};
+    auto reportError = [&](const char *stage, int32_t code) {
+        ++errors;
+        const auto now = std::chrono::steady_clock::now();
+        if (reportedErrors == 0 || now - lastError >= std::chrono::seconds(5)) {
+            HILOGE("[IpShare][Tun] read error stage=%{public}s code=%{public}d count=%{public}llu", stage, code,
+                   static_cast<unsigned long long>(errors));
+            reportedErrors = errors;
+            lastError = now;
+        }
+    };
     while (running_.load()) {
         int fd = -1;
         PacketCallback callback;
@@ -204,8 +232,13 @@ void NearlinkIpShareTun::ReadLoop()
         }
         struct pollfd pollFd = {.fd = fd, .events = POLLIN, .revents = 0};
         int pollResult = poll(&pollFd, 1, 200);
+        if (!running_.load()) {
+            break;
+        }
         if (pollResult < 0) {
-            HILOGE("[DHCP][IpShare][Tun] poll failed errno=%{public}d", errno);
+            if (errno != EINTR) {
+                reportError("POLL", errno);
+            }
             continue;
         }
         if (pollResult == 0 || (pollFd.revents & POLLIN) == 0) {
@@ -216,10 +249,15 @@ void NearlinkIpShareTun::ReadLoop()
 
             callback(packet, static_cast<uint16_t>(length));
         } else if (length < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            HILOGE("[DHCP][IpShare][Tun] read failed errno=%{public}d", errno);
+            if (errno != EINTR) {
+                reportError("READ", errno);
+            }
         } else if (length > 0 && !callback) {
-            HILOGE("[DHCP][IpShare][Tun] read dropped: packet callback is null");
+            reportError("CALLBACK", EINVAL);
         }
+    }
+    if (errors != reportedErrors) {
+        HILOGE("[IpShare][Tun] final read errors=%{public}llu", static_cast<unsigned long long>(errors));
     }
     HILOGI("[IpShare][Tun] read loop stopped");
 }

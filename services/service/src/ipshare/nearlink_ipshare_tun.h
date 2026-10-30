@@ -19,8 +19,8 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
-#include <thread>
 #include <string>
+#include <thread>
 
 namespace OHOS::Nearlink {
 
@@ -31,22 +31,24 @@ public:
     NearlinkIpShareTun() = default;
     ~NearlinkIpShareTun();
 
-    int32_t Open(const PacketCallback &callback);
+    int32_t Open(const PacketCallback &callback, const std::string &ifaceName = "sleip0");
     void Close();
     int32_t Write(const uint8_t *data, uint16_t length);
     bool IsOpen() const;
-    static bool IsIpv6AddressUsable(const uint8_t address[16]);
-    static bool ParseIpv6Evidence(const std::string &text, uint32_t index, uint8_t address[16]);
+    static bool IsIpv6AddressUsable(const uint8_t address[16], const std::string &ifaceName = "sleip0");
+    static bool ParseIpv6Evidence(const std::string &text, uint32_t index, uint8_t address[16],
+                                  const std::string &ifaceName = "sleip0");
 
 private:
     void ReadLoop();
 
     mutable std::mutex mutex_;
-    int fd_ {-1};
-    std::atomic_bool running_ {false};
+    int fd_{-1};
+    std::atomic_bool running_{false};
     PacketCallback callback_;
     std::thread reader_;
+    std::string ifaceName_;
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // NEARLINK_IPSHARE_TUN_H
+} // namespace OHOS::Nearlink
+#endif // NEARLINK_IPSHARE_TUN_H

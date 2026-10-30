@@ -15,6 +15,7 @@
 
 #include "nearlink_sle_datatransfer_service.h"
 #include "nearlink_ipshare_channel.h"
+#include "nearlink_ipshare_service.h"
 #include "SleInterfaceAdapterSub.h"
 #include "SleInterfaceManager.h"
 #include "SleControllerService.h"
@@ -187,6 +188,7 @@ public:
         HILOGD("addr: %{public}s, state: %{public}d, reason: 0x%{public}x", GET_ENCRYPT_ADDR(device), state, reason);
         NL_CHECK_RETURN_LOGD(state == static_cast<int>(SleConnState::SLE_CONNECTION_STATE_DISCONNECTED), "ignore");
         std::string addr = device.GetAddress();
+        NearlinkIpShareService::GetInstance().OnPeerDisconnected(addr);
         DoInDataTransferThread([this, addr]() {
             impl_->ConnectCarReqStateChanged(addr);
         });
@@ -1214,9 +1216,19 @@ void SleDataTransferService::SendDataStateCallback(const SLE_Addr_S *devAddr, ui
     });
 }
 
+bool SleDataTransferService::CheckIpSharePeerCallback(const SLE_Addr_S *addr, uint16_t srcPort)
+{
+    return NearlinkIpShareChannel::IsAcceptingPort(addr, srcPort);
+}
+
+void SleDataTransferService::CancelIpSharePeerCallback(const SLE_Addr_S *addr, uint16_t srcPort)
+{
+    NearlinkIpShareChannel::CancelPassiveReservation(addr, srcPort);
+}
+
 bool SleDataTransferService::CheckChannelParamCallback(uint16_t srcPort)
 {
-    if (NearlinkIpShareChannel::IsAcceptingPort(srcPort)) {
+    if (NearlinkIpShareChannel::IsIpSharePort(srcPort)) {
         HILOGI("[IpShare][DataTransfer] accepted IPoSL QoSM channel port=%{public}u", srcPort);
         return true;
     }
@@ -1238,7 +1250,7 @@ void SleDataTransferService::ChannelStatusCallback(const QOSM_TransChannelRspPar
     NL_CHECK_RETURN(respParams, "stack dt channel cb null");
     if (NearlinkIpShareChannel::HandleChannelStatus(respParams)) {
         HILOGI("[IpShare][DataTransfer] dispatched IPoSL channel status=%{public}d lcid=%{public}u tcid=%{public}u",
-            respParams->status, respParams->lcid, respParams->tcid);
+               respParams->status, respParams->lcid, respParams->tcid);
         return;
     }
     RawAddress rawAddress(RawAddress::ConvertToString(respParams->addr.addr));
@@ -1359,6 +1371,10 @@ int SleDataTransferService::RegisterSleDataTransferCallbackToStack()
     transChannelCbks.establishedCheck = &SleDataTransferService::CheckChannelParamCallback;
     ret = QOSM_TransChannelCbksRegister(&transChannelCbks);
     HILOGI("DT stack channel cb ret=0x%{public}x", ret);
+    if (ret == 0) {
+        ret = QOSM_RegisterIpSharePeerCallbacks(&SleDataTransferService::CheckIpSharePeerCallback,
+                                                &SleDataTransferService::CancelIpSharePeerCallback);
+    }
     return ret;
 }
 

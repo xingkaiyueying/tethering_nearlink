@@ -12,6 +12,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -96,7 +97,8 @@ static int WaitForState(int32_t wanted)
         if (ret != 0) {
             return PrintStatusResult(ret, true);
         }
-        if (status.state == wanted) {
+        if (status.state == wanted ||
+            (wanted == 8 && status.role == 1 && status.serviceReady && status.state < 10)) {
             return PrintStatusResult(0, true);
         }
         if (status.state == 11) {
@@ -262,7 +264,7 @@ static int RunBearer(const char *role, const char *localText, const char *peerTe
 
 static void Usage(const char *program)
 {
-    fprintf(stderr, "usage: %s [--no-token] vector|status|stop|support ADDRESS|capabilities ADDRESS|gateway-start ADDRESS [ipv4|dual]|terminal-start ADDRESS [ipv4|dual]|bearer gateway|terminal LOCAL_L2 PEER_L2|negative LOCAL_L2 PEER_L2\n",
+    fprintf(stderr, "usage: %s [--no-token] vector|status|stop|support ADDRESS|capabilities ADDRESS|gateway-start ipv4|dual MAX_TERMINALS|terminal-start ADDRESS [ipv4|dual]|bearer gateway|terminal LOCAL_L2 PEER_L2|negative LOCAL_L2 PEER_L2\n",
         program);
 }
 
@@ -295,20 +297,23 @@ int main(int argc, char *argv[])
             caps.peerCapabilityKnown, caps.peerModeCount, caps.peerModes[0], caps.peerModes[1], ret);
         return ret == 0 ? 0 : 1;
     }
-    if (argc == 4 && (strcmp(argv[1], "gateway-start") == 0 || strcmp(argv[1], "terminal-start") == 0)) {
+    if (argc == 4 && strcmp(argv[1], "terminal-start") == 0) {
         int mode = strcmp(argv[3], "dual") == 0 ? 3 : strcmp(argv[3], "ipv4") == 0 ? 1 : 0;
         if (!mode) return 2;
-        int ret = strcmp(argv[1], "gateway-start") == 0 ? NlIpShareStartGatewayWithMode(argv[2], mode) :
-            NlIpShareStartTerminalWithMode(argv[2], mode);
+        int ret = NlIpShareStartTerminalWithMode(argv[2], mode);
         return ret == 0 ? WaitForState(5) : PrintStatusResult(ret, true);
     }
     if (argc == 4 && strcmp(argv[1], "negative") == 0) return RunNegative(argv[2], argv[3]);
     if (argc == 5 && strcmp(argv[1], "bearer") == 0) {
         return RunBearer(argv[2], argv[3], argv[4]);
     }
-    if (argc == 3 && strcmp(argv[1], "gateway-start") == 0) {
-        int32_t ret = NlIpShareStartGateway(argv[2]);
-        return ret == 0 ? WaitForState(5) : PrintStatusResult(ret, true);
+    if (argc == 4 && strcmp(argv[1], "gateway-start") == 0) {
+        int mode = strcmp(argv[2], "dual") == 0 ? 3 : strcmp(argv[2], "ipv4") == 0 ? 1 : 0;
+        char *end = NULL;
+        long capacity = strtol(argv[3], &end, 10);
+        if (mode == 0 || end == argv[3] || *end != '\0' || capacity < 1 || capacity > 32) return 2;
+        int32_t ret = NlIpShareStartGatewayAny(mode, (int32_t)capacity);
+        return ret == 0 ? WaitForState(8) : PrintStatusResult(ret, true);
     }
     if (argc == 3 && strcmp(argv[1], "terminal-start") == 0) {
         int32_t ret = NlIpShareStartTerminal(argv[2]);

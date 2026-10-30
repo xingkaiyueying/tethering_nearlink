@@ -14,11 +14,12 @@
  */
 #include "nearlink_ipshare_channel.h"
 
-#include <cstring>
 #include <algorithm>
+#include <cstring>
+#include <vector>
 
-#include "log.h"
 #include "iposl_profile.h"
+#include "log.h"
 #include "nearlink_ipshare_service.h"
 #include "sdf_buff.h"
 
@@ -114,14 +115,45 @@ uint16_t ReadUint16(const uint8_t *data)
 
 } // namespace
 
+/* A single DTAP PI callback is shared by all peer channels. Registry membership
+ * protects object lifetime while a stack callback selects its owner. */
+std::mutex g_channelRegistryMutex;
+std::vector<std::shared_ptr<NearlinkIpShareChannel>> g_channelRegistry;
+std::mutex g_protoMutex;
+uint32_t g_ipv4Users = 0;
+uint32_t g_ipv6Users = 0;
+
+int32_t AddProtocolUser(uint8_t pi)
+{
+    std::lock_guard<std::mutex> lock(g_protoMutex);
+    uint32_t &users = pi == DTAP_PI_IPV4 ? g_ipv4Users : g_ipv6Users;
+    if (users == 0 &&
+        DTAP_RegisterProtoRecvCbk(pi, pi == DTAP_PI_IPV4 ? &NearlinkIpShareChannel::OnIpv4Received
+                                                         : &NearlinkIpShareChannel::OnIpv6Received) != 0) {
+        return -1;
+    }
+    ++users;
+    return 0;
+}
+
+void RemoveProtocolUser(uint8_t pi)
+{
+    std::lock_guard<std::mutex> lock(g_protoMutex);
+    uint32_t &users = pi == DTAP_PI_IPV4 ? g_ipv4Users : g_ipv6Users;
+    if (users != 0 && --users == 0) {
+        (void)DTAP_UnregisterProtoRecvCbk(pi);
+    }
+}
+
 NearlinkIpShareChannel &NearlinkIpShareChannel::GetInstance()
 {
-    static NearlinkIpShareChannel instance;
-    return instance;
+    static auto instance = std::make_shared<NearlinkIpShareChannel>();
+    return *instance;
 }
 
 int32_t NearlinkIpShareChannel::Initialize(const StateCallback &callback)
 {
+    std::lock_guard<std::mutex> registryLock(g_channelRegistryMutex);
     std::lock_guard<std::mutex> lock(mutex_);
     if (initialized_) {
         callback_ = callback;
@@ -130,6 +162,7 @@ int32_t NearlinkIpShareChannel::Initialize(const StateCallback &callback)
     }
     callback_ = callback;
     initialized_ = true;
+    g_channelRegistry.push_back(shared_from_this());
     HILOGI("[IpShare][Channel] initialize completed: PI callbacks deferred until mode reservation");
     return 0;
 }
@@ -138,6 +171,10 @@ void NearlinkIpShareChannel::Deinitialize()
 {
     HILOGI("[IpShare][Channel] deinitialize started");
     Close();
+    std::lock_guard<std::mutex> registryLock(g_channelRegistryMutex);
+    g_channelRegistry.erase(std::remove_if(g_channelRegistry.begin(), g_channelRegistry.end(),
+                                           [this](const auto &entry) { return entry.get() == this; }),
+                            g_channelRegistry.end());
     std::lock_guard<std::mutex> lock(mutex_);
     initialized_ = false;
     callback_ = nullptr;
@@ -150,24 +187,10 @@ bool NearlinkIpShareChannel::IsDrained()
     return !active_ && !channelPending_ && !channelEstablished_ && !releasing_ && mode_ == 0 && !tun_.IsOpen();
 }
 
-int32_t NearlinkIpShareChannel::ResetBinding(uint64_t generation)
+bool NearlinkIpShareChannel::IsEstablished()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!active_ || channelPending_ || channelEstablished_ || releasing_) {
-        return -1;
-    }
-    enabled_ = false;
-    if (mode_ != 0) {
-        (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV4);
-    }
-    if (mode_ == 3) {
-        (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV6);
-    }
-    mode_ = 0;
-    generation_ = generation;
-    ipv6_.Reset();
-    addressSequence_ = 0;
-    return 0;
+    return active_ && enabled_ && channelEstablished_ && !releasing_;
 }
 
 int32_t NearlinkIpShareChannel::PrepareMode(uint8_t mode)
@@ -181,20 +204,20 @@ int32_t NearlinkIpShareChannel::PrepareMode(uint8_t mode)
         return 0;
     }
     if (mode_ != 0) {
-        (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV4);
+        RemoveProtocolUser(DTAP_PI_IPV4);
     }
     if (mode_ == 3) {
-        (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV6);
+        RemoveProtocolUser(DTAP_PI_IPV6);
     }
     mode_ = 0;
     if (mode == 0) {
         return 0;
     }
-    if (DTAP_RegisterProtoRecvCbk(DTAP_PI_IPV4, &OnIpv4Received) != 0) {
+    if (AddProtocolUser(DTAP_PI_IPV4) != 0) {
         return -1;
     }
-    if (mode == 3 && DTAP_RegisterProtoRecvCbk(DTAP_PI_IPV6, &OnIpv6Received) != 0) {
-        (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV4);
+    if (mode == 3 && AddProtocolUser(DTAP_PI_IPV6) != 0) {
+        RemoveProtocolUser(DTAP_PI_IPV4);
         return -1;
     }
     mode_ = mode;
@@ -217,11 +240,11 @@ int32_t NearlinkIpShareChannel::UpdateValidatedAddress(const NearlinkIpShareAddr
     NearlinkIpShareIpv6::Address binary{};
     if (!active_ || !enabled_ || mode_ != 3 || !channelEstablished_ || address.generation != generation_ ||
         address.sequence <= addressSequence_ || address.prefixLength > 128 ||
-        !NearlinkIpShareTun::ParseIpv6Evidence(address.address, address.ifindex, binary.data())) {
+        !NearlinkIpShareTun::ParseIpv6Evidence(address.address, address.ifindex, binary.data(), ifaceName_)) {
         return -1;
     }
     if (address.validLifetime && (address.flags & (0x40 | 0x08 | 0x04)) == 0 &&
-        !NearlinkIpShareTun::IsIpv6AddressUsable(binary.data())) {
+        !NearlinkIpShareTun::IsIpv6AddressUsable(binary.data(), ifaceName_)) {
         return -1;
     }
     auto now =
@@ -242,8 +265,7 @@ int32_t NearlinkIpShareChannel::UpdateValidatedAddress(const NearlinkIpShareAddr
         return mapping.address == binary && mapping.terminal == !gateway_;
     });
     bool present = current != ipv6_.Mappings().end();
-    if (existed == present && (!present ||
-        (wasConfirmed == current->confirmed && wasConflict == current->conflict))) {
+    if (existed == present && (!present || (wasConfirmed == current->confirmed && wasConflict == current->conflict))) {
         return 0;
     }
     size_t confirmed = 0;
@@ -260,12 +282,13 @@ int32_t NearlinkIpShareChannel::UpdateValidatedAddress(const NearlinkIpShareAddr
             ++conflicts;
         }
     }
-    HILOGI("[IpShare][IPv6] local evidence sequence=%{public}llu flags=%{public}u "
-           "preferred=%{public}u valid=%{public}u records=%{public}zu confirmed=%{public}zu "
-           "terminalConfirmed=%{public}zu gatewayConfirmed=%{public}zu conflicts=%{public}zu",
-           static_cast<unsigned long long>(address.sequence), address.flags,
-           address.preferredLifetime, address.validLifetime, ipv6_.Mappings().size(), confirmed, terminalConfirmed,
-           confirmed - terminalConfirmed, conflicts);
+    HILOGI(
+        "[IpShare][IPv6] local evidence sequence=%{public}llu flags=%{public}u "
+        "preferred=%{public}u valid=%{public}u records=%{public}zu confirmed=%{public}zu "
+        "terminalConfirmed=%{public}zu gatewayConfirmed=%{public}zu conflicts=%{public}zu",
+        static_cast<unsigned long long>(address.sequence), address.flags, address.preferredLifetime,
+        address.validLifetime, ipv6_.Mappings().size(), confirmed, terminalConfirmed, confirmed - terminalConfirmed,
+        conflicts);
     return 0;
 }
 
@@ -278,23 +301,20 @@ bool NearlinkIpShareChannel::CanSend(uint16_t lcid, uint8_t tcid, uint8_t pi, ui
 
 int NearlinkIpShareChannel::OnIpv6Received(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
 {
-    auto &channel = GetInstance();
-    int ret = channel.Receive(info, buffer);
-    if (ret != 0) {
-        ++channel.rejected_;
-    }
-    return ret;
+    return OnIpv4Received(info, buffer);
 }
 
-int32_t NearlinkIpShareChannel::CreateTun()
+int32_t NearlinkIpShareChannel::CreateTun(const std::string &ifaceName)
 {
+    ifaceName_ = ifaceName;
     HILOGI("[IpShare][Channel] create TUN requested");
-    int32_t ret = tun_.Open([this](const uint8_t *data, uint16_t length) {
-        if (Send(data, length) != 0) {
-            ++rejected_;
-            HILOGW("[IpShare][Channel] drop outbound IP packet");
-        }
-    });
+    int32_t ret = tun_.Open(
+        [this](const uint8_t *data, uint16_t length) {
+            if (Send(data, length) != 0) {
+                ++rejected_;
+            }
+        },
+        ifaceName);
     if (ret != 0) {
         HILOGE("[IpShare][Channel] create TUN failed ret=%{public}d", ret);
         return ret;
@@ -331,6 +351,8 @@ int32_t NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressTy
     tx4_ = 0;
     tx6_ = 0;
     rejected_ = 0;
+    receiveErrors_ = {};
+    sendErrors_ = {};
     return 0;
 }
 
@@ -399,10 +421,10 @@ void NearlinkIpShareChannel::Close()
             releasing_ = true;
         }
         if (mode_ != 0) {
-            (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV4);
+            RemoveProtocolUser(DTAP_PI_IPV4);
         }
         if (mode_ == 3) {
-            (void)DTAP_UnregisterProtoRecvCbk(DTAP_PI_IPV6);
+            RemoveProtocolUser(DTAP_PI_IPV6);
         }
         mode_ = 0;
         // Retain pending creation and release identity for late completion and repeated Stop.
@@ -411,6 +433,17 @@ void NearlinkIpShareChannel::Close()
         dhcpRequest_ = false;
         boundIp_ = 0;
         ipv6_.Reset();
+        for (const auto &errors : {&receiveErrors_, &sendErrors_}) {
+            if (errors->total != errors->reported) {
+                HILOGE(
+                    "[IpShare][PacketError] final direction=%{public}s iface=%{public}s "
+                    "generation=%{public}llu count=%{public}llu sinceLast=%{public}llu",
+                    errors == &receiveErrors_ ? "rx" : "tx", ifaceName_.c_str(),
+                    static_cast<unsigned long long>(generation_), static_cast<unsigned long long>(errors->total),
+                    static_cast<unsigned long long>(errors->total - errors->reported));
+                errors->reported = errors->total;
+            }
+        }
     }
     if (destroy) {
         int32_t ret = QOSM_TransChannelDestroy(&release);
@@ -421,11 +454,18 @@ void NearlinkIpShareChannel::Close()
         }
     }
     tun_.Close();
-    HILOGI("[IpShare][Channel] closed rx4=%{public}llu rx6=%{public}llu tx4=%{public}llu tx6=%{public}llu "
-           "rejected=%{public}llu",
-           static_cast<unsigned long long>(rx4_.load()), static_cast<unsigned long long>(rx6_.load()),
-           static_cast<unsigned long long>(tx4_.load()), static_cast<unsigned long long>(tx6_.load()),
-           static_cast<unsigned long long>(rejected_.load()));
+    HILOGI(
+        "[IpShare][Channel] closed rx4=%{public}llu rx6=%{public}llu tx4=%{public}llu tx6=%{public}llu "
+        "rejected=%{public}llu",
+        static_cast<unsigned long long>(rx4_.load()), static_cast<unsigned long long>(rx6_.load()),
+        static_cast<unsigned long long>(tx4_.load()), static_cast<unsigned long long>(tx6_.load()),
+        static_cast<unsigned long long>(rejected_.load()));
+}
+
+bool NearlinkIpShareChannel::OwnsChannel(uint16_t lcid, uint8_t tcid)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return channelEstablished_ && lcid == lcid_ && tcid == tcid_;
 }
 
 bool NearlinkIpShareChannel::IsIpSharePort(uint16_t port)
@@ -433,26 +473,98 @@ bool NearlinkIpShareChannel::IsIpSharePort(uint16_t port)
     return port == IP_SHARE_PORT;
 }
 
-bool NearlinkIpShareChannel::IsAcceptingPort(uint16_t port)
+bool NearlinkIpShareChannel::IsAcceptingPort(const SLE_Addr_S *addr, uint16_t port)
 {
-    return GetInstance().CanAccept(port);
+    if (!IsIpSharePort(port) || addr == nullptr) {
+        return false;
+    }
+    std::vector<std::shared_ptr<NearlinkIpShareChannel>> channels;
+    {
+        std::lock_guard<std::mutex> lock(g_channelRegistryMutex);
+        channels = g_channelRegistry;
+    }
+    for (const auto &channel : channels) {
+        if (channel->CanAccept(addr, port)) {
+            return true;
+        }
+    }
+    return false;
 }
 
-bool NearlinkIpShareChannel::CanAccept(uint16_t port)
+bool NearlinkIpShareChannel::CanAccept(const SLE_Addr_S *addr, uint16_t port)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     const uint8_t emptyPeer[6] = {0};
     bool accept = IsIpSharePort(port) && initialized_ && enabled_ && active_ && !releasing_ && !channelPending_ &&
                   !channelEstablished_ && tun_.IsOpen() && memcmp(peer_, emptyPeer, sizeof(peer_)) != 0;
+    accept = accept && addr != nullptr && addr->type == addressType_ && memcmp(addr->addr, peer_, sizeof(peer_)) == 0;
     if (accept) {
         channelPending_ = true;
-    } // Passive creation has the same late-completion race as Open.
+        passivePending_ = true;
+    }
     return accept;
+}
+
+void NearlinkIpShareChannel::CancelPassiveReservation(const SLE_Addr_S *addr, uint16_t port)
+{
+    if (addr == nullptr || !IsIpSharePort(port)) {
+        return;
+    }
+    std::vector<std::shared_ptr<NearlinkIpShareChannel>> channels;
+    {
+        std::lock_guard<std::mutex> lock(g_channelRegistryMutex);
+        channels = g_channelRegistry;
+    }
+    for (const auto &channel : channels) {
+        channel->CancelPassive(addr, port);
+    }
+}
+
+void NearlinkIpShareChannel::CancelPassive(const SLE_Addr_S *addr, uint16_t port)
+{
+    StateCallback callback;
+    uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!IsIpSharePort(port) || addr->type != addressType_ || memcmp(addr->addr, peer_, sizeof(peer_)) != 0 ||
+            !passivePending_ || !channelPending_ || channelEstablished_ || releasing_) {
+            return;
+        }
+        channelPending_ = false;
+        passivePending_ = false;
+        if (!active_) {
+            callback = callback_;
+        }
+        generation = generation_;
+    }
+    if (callback) {
+        callback(false, 0, generation);
+    }
 }
 
 bool NearlinkIpShareChannel::HandleChannelStatus(const QOSM_TransChannelRspParams_S *params)
 {
-    return GetInstance().ConsumeStatus(params);
+    if (params == nullptr || (!IsIpSharePort(params->srcPort) && !IsIpSharePort(params->dstPort))) {
+        return false;
+    }
+    std::vector<std::shared_ptr<NearlinkIpShareChannel>> channels;
+    {
+        std::lock_guard<std::mutex> lock(g_channelRegistryMutex);
+        channels = g_channelRegistry;
+    }
+    for (const auto &channel : channels) {
+        if (channel->ConsumeStatus(params)) {
+            return true;
+        }
+    }
+    // Keep IPShare's reserved port out of ordinary DataTransfer even for late/unknown peers.
+    if (params->status == QOSM_TRANS_CHANNEL_ESTABLISHED) {
+        QOSM_TransChannelReleaseParams_S release = {};
+        release.addr = params->addr;
+        release.tcid = params->tcid;
+        (void)QOSM_TransChannelDestroy(&release);
+    }
+    return true;
 }
 
 bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *params)
@@ -468,17 +580,32 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
     QOSM_TransChannelReleaseParams_S release = {};
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (memcmp(params->addr.addr, peer_, sizeof(peer_)) != 0 || params->addr.type != addressType_) {
+        if (memcmp(params->addr.addr, peer_, sizeof(peer_)) != 0 || params->addr.type != addressType_ ||
+            (!active_ && !channelPending_ && !releasing_ && !channelEstablished_)) {
             return false;
         }
         if (params->status == QOSM_TRANS_CHANNEL_ESTABLISHED) {
-            if (channelEstablished_ && (lcid_ != params->lcid || tcid_ != params->tcid)) {
+            if ((channelEstablished_ || releasing_) && (lcid_ != params->lcid || tcid_ != params->tcid)) {
                 // An unrelated success must never replace the current channel.
                 release.addr = params->addr;
                 release.tcid = params->tcid;
                 destroy = true;
+            } else if (params->mtu < IPOSL_MTU) {
+                channelPending_ = false;
+                passivePending_ = false;
+                lcid_ = params->lcid;
+                tcid_ = params->tcid;
+                releasing_ = true;
+                release.addr = params->addr;
+                release.tcid = params->tcid;
+                destroy = true;
+                if (active_) {
+                    callback = callback_;
+                    error = -1;
+                }
             } else {
                 channelPending_ = false;
+                passivePending_ = false;
                 lcid_ = params->lcid;
                 tcid_ = params->tcid;
                 if (!initialized_ || !active_ || releasing_) {
@@ -493,10 +620,11 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
                 }
             }
         } else if (params->status == QOSM_TRANS_CHANNEL_ESTABLISH_FAIL) {
-            if (!channelPending_) {
+            if (!channelPending_ && !active_) {
                 return true;
             }
             channelPending_ = false;
+            passivePending_ = false;
             if (active_) {
                 callback = callback_;
                 error = -1;
@@ -533,33 +661,48 @@ bool NearlinkIpShareChannel::ConsumeStatus(const QOSM_TransChannelRspParams_S *p
 
 int NearlinkIpShareChannel::OnIpv4Received(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
 {
-    auto &channel = GetInstance();
-    int ret = channel.Receive(info, buffer);
-    if (ret != 0) {
-        ++channel.rejected_;
+    if (info == nullptr) {
+        return -1;
     }
-    return ret;
+    std::vector<std::shared_ptr<NearlinkIpShareChannel>> channels;
+    {
+        std::lock_guard<std::mutex> lock(g_channelRegistryMutex);
+        channels = g_channelRegistry;
+    }
+    for (const auto &channel : channels) {
+        if (!channel->OwnsChannel(info->lcid, info->tcid)) {
+            continue;
+        }
+        int ret = channel->Receive(info, buffer);
+        if (ret != 0) {
+            ++channel->rejected_;
+        }
+        return ret;
+    }
+    return -1;
 }
 
 int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
 {
     if (info == nullptr || buffer == nullptr || (info->pi != DTAP_PI_IPV4 && info->pi != DTAP_PI_IPV6)) {
-        HILOGE("[IpShare][RX] packet rejected: invalid DTAP input");
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (active_) {
+            RecordPacketErrorLocked(true, "DTAP_INPUT", -1);
+        }
         return -1;
     }
     const uint8_t *data = SDF_DataOffset(buffer);
     uint32_t dataLen = SDF_DataLenGet(buffer);
-    bool bound = false;
     uint64_t generation = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!active_ || !channelEstablished_ || info->lcid != lcid_ || info->tcid != tcid_ || dataLen > UINT16_MAX) {
-            HILOGW("[IpShare][RX] packet rejected: channel mismatch lcid=%{public}u tcid=%{public}u "
-                   "length=%{public}u",
-                   info->lcid, info->tcid, dataLen);
+            if (active_) {
+                RecordPacketErrorLocked(true, "CHANNEL", -1);
+            }
             return -1;
         }
-        bound = DhcpBoundLocked();
+        (void)DhcpBoundLocked();
         generation = generation_;
     }
     uint16_t length = static_cast<uint16_t>(dataLen);
@@ -568,8 +711,6 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
         return -1;
     }
     if (!AuthorizePacket(data, length, generation, true)) {
-        HILOGW("[IpShare][RX] packet rejected by IP policy pi=%{public}u length=%{public}u dhcpBound=%{public}d",
-               info->pi, length, bound);
         return -1;
     }
     /* Recheck under the ownership lock through delivery; stop cannot close/reopen underneath it. */
@@ -579,7 +720,7 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
     }
     int32_t ret = tun_.Write(data, length);
     if (ret != 0) {
-        HILOGE("[IpShare][RX] delivery to TUN failed ret=%{public}d length=%{public}u", ret, length);
+        RecordPacketErrorLocked(true, "TUN_WRITE", ret);
         return ret;
     }
     if (info->pi == 1) {
@@ -587,8 +728,6 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
     } else {
         ++rx6_;
     }
-    HILOGD("[IpShare][RX] pi=%{public}u lcid=%{public}u tcid=%{public}u sdu=%{public}u", info->pi, info->lcid,
-           info->tcid, length);
     return 0;
 }
 
@@ -608,29 +747,30 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
     }
     uint16_t lcid = 0;
     uint8_t tcid = 0;
-    bool bound = false;
     uint64_t generation = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!active_ || !channelEstablished_) {
-            HILOGW("[IpShare][TX] packet rejected: QoSM channel not established");
+            if (active_) {
+                RecordPacketErrorLocked(false, "CHANNEL", -1);
+            }
             return -1;
         }
         lcid = lcid_;
         tcid = tcid_;
-        bound = DhcpBoundLocked();
+        (void)DhcpBoundLocked();
         generation = generation_;
     }
     if (!AuthorizePacket(data, length, generation, false)) {
-        uint8_t version = data != nullptr && length != 0 ? data[0] >> 4 : 0;
-        HILOGW("[IpShare][TX] packet rejected by IP policy version=%{public}u length=%{public}u dhcpBound=%{public}d",
-               version, length, bound);
         return -1;
     }
     uint8_t pi = data[0] >> 4 == 6 ? DTAP_PI_IPV6 : DTAP_PI_IPV4;
     int32_t ret = IposlProfileSendIp(lcid, tcid, pi, data, length, generation);
     if (ret != 0) {
-        HILOGE("[IpShare][TX] DTAP send failed lcid=%{public}u tcid=%{public}u ret=%{public}d", lcid, tcid, ret);
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (active_ && generation == generation_) {
+            RecordPacketErrorLocked(false, "DTAP_SEND", ret);
+        }
         return -1;
     }
     if (pi == 1) {
@@ -638,8 +778,24 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
     } else {
         ++tx6_;
     }
-    HILOGD("[IpShare][TX] pi=%{public}u lcid=%{public}u tcid=%{public}u sdu=%{public}u", pi, lcid, tcid, length);
     return 0;
+}
+
+void NearlinkIpShareChannel::RecordPacketErrorLocked(bool received, const char *stage, int32_t code)
+{
+    auto &errors = received ? receiveErrors_ : sendErrors_;
+    ++errors.total;
+    const auto now = std::chrono::steady_clock::now();
+    if (errors.reported != 0 && now - errors.lastReport < std::chrono::seconds(5)) {
+        return;
+    }
+    HILOGE(
+        "[IpShare][PacketError] direction=%{public}s stage=%{public}s iface=%{public}s "
+        "generation=%{public}llu code=%{public}d count=%{public}llu sinceLast=%{public}llu",
+        received ? "rx" : "tx", stage, ifaceName_.c_str(), static_cast<unsigned long long>(generation_), code,
+        static_cast<unsigned long long>(errors.total), static_cast<unsigned long long>(errors.total - errors.reported));
+    errors.reported = errors.total;
+    errors.lastReport = now;
 }
 
 bool NearlinkIpShareChannel::DhcpBoundLocked()
@@ -859,32 +1015,14 @@ bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t lengt
         // Revalidate at most once per monotonic second; generation reset and address
         // evidence still revoke cached records immediately.
         if (verifyLocal && !next.LocalUsable(local, !gateway_, now) &&
-            (!NearlinkIpShareTun::IsIpv6AddressUsable(data + 8) || !next.ObserveKernelLocal(local, !gateway_, now))) {
+            (!NearlinkIpShareTun::IsIpv6AddressUsable(data + 8, ifaceName_) ||
+             !next.ObserveKernelLocal(local, !gateway_, now))) {
             return false;
         }
-        size_t oldRecords = ipv6_.Mappings().size();
-        size_t oldConfirmed = std::count_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(),
-                                            [](const auto &mapping) { return mapping.confirmed; });
-        size_t oldConflicts = std::count_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(),
-                                            [](const auto &mapping) { return mapping.conflict; });
         bool allowed = next.Authorize(data, length, gateway_ == received, received ? peer_ : localLayer2_,
                                       static_cast<uint64_t>(seconds));
         if (allowed) {
             ipv6_ = std::move(next);
-            size_t confirmed = std::count_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(),
-                                             [](const auto &mapping) { return mapping.confirmed; });
-            size_t terminalConfirmed =
-                std::count_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(),
-                              [](const auto &mapping) { return mapping.confirmed && mapping.terminal; });
-            size_t conflicts = std::count_if(ipv6_.Mappings().begin(), ipv6_.Mappings().end(),
-                                             [](const auto &mapping) { return mapping.conflict; });
-            if (oldRecords != ipv6_.Mappings().size() || oldConfirmed != confirmed || oldConflicts != conflicts) {
-                HILOGI("[IpShare][IPv6] mapping transition generation=%{public}llu direction=%{public}s "
-                       "records=%{public}zu confirmed=%{public}zu terminalConfirmed=%{public}zu "
-                       "gatewayConfirmed=%{public}zu conflicts=%{public}zu",
-                       static_cast<unsigned long long>(generation_), received ? "rx" : "tx", ipv6_.Mappings().size(),
-                       confirmed, terminalConfirmed, confirmed - terminalConfirmed, conflicts);
-            }
         }
         return allowed;
     }

@@ -23,6 +23,25 @@
 #include "cm_dyn_trans_channel_api.h"
 
 static CM_DynTransChannelCbks_S g_channelCbks = { 0 };
+static CM_DynTransPeerCheck g_peerCheck;
+static CM_DynTransPeerCancel g_peerCancel;
+
+void CM_DynTransChannStateMgrRegPeerCheck(CM_DynTransPeerCheck callback)
+{
+    g_peerCheck = callback;
+}
+
+void CM_DynTransChannStateMgrRegPeerCancel(CM_DynTransPeerCancel callback)
+{
+    g_peerCancel = callback;
+}
+
+static void CM_DynTransCancelPeerReservation(const CM_DynTransChanParam_S *param)
+{
+    if (g_peerCancel != NULL) {
+        g_peerCancel(param->lcid, param->srcPort, param->dstPort);
+    }
+}
 
 static uint32_t CM_DynTransChanActiveEstablishingReqHandler(uint8_t curState, const CM_DynTransChanParam_S *param,
     uint8_t nextState);
@@ -446,8 +465,11 @@ static uint32_t CM_DynTransChanPassiveReleasedReqHandler(uint8_t curState, const
     return CM_SUCCESS;
 }
 
-static bool CM_DynTransChannelEstablishedCheck(uint16_t srcPort, uint16_t dstPort)
+static bool CM_DynTransChannelEstablishedCheck(uint16_t lcid, uint16_t srcPort, uint16_t dstPort)
 {
+    if (g_peerCheck != NULL && !g_peerCheck(lcid, srcPort, dstPort)) {
+        return false;
+    }
     if (g_channelCbks.establishedCheckCbk == NULL) {
         CM_LOGW("establishedCheckCbk is null");
         return true;
@@ -489,7 +511,7 @@ static uint32_t CM_DynTransChanPassiveEstablishedReqHandler(uint8_t curState, co
         CM_DynTransChanSendEstablishedErrResp(param, CM_RESULT_UNSUPPORTED_MTU_SIZE);
         return CM_FAIL;
     }
-    if (!CM_DynTransChannelEstablishedCheck(param->srcPort, param->dstPort)) {
+    if (!CM_DynTransChannelEstablishedCheck(param->lcid, param->srcPort, param->dstPort)) {
         CM_LOGW("established req check failed, srcPort: 0x%04x, dstPort: 0x%04x", param->srcPort, param->dstPort);
         CM_DynTransChanSendEstablishedErrResp(param, CM_RESULT_INSUFFICIENT_RESOURCE);
         return CM_FAIL;
@@ -497,7 +519,11 @@ static uint32_t CM_DynTransChanPassiveEstablishedReqHandler(uint8_t curState, co
 
     // 1. allocate local tcid
     uint8_t localTcid = CM_DynTcidAllocate(param->lcid, param->expectedTransportMode);
-    CM_CHECK_RETURN_RET((localTcid != CM_TRANS_INVALID_TCID), CM_FAIL, "get avaliable localTcid failed");
+    if (localTcid == CM_TRANS_INVALID_TCID) {
+        CM_LOGE("get avaliable localTcid failed");
+        CM_DynTransCancelPeerReservation(param);
+        return CM_FAIL;
+    }
     // 2. active dyn trans channel node
     CM_DynTransChanParam_S activeParam = { 0 };
     (void)memcpy_s(&activeParam, sizeof(CM_DynTransChanParam_S), param, sizeof(CM_DynTransChanParam_S));
@@ -507,6 +533,7 @@ static uint32_t CM_DynTransChanPassiveEstablishedReqHandler(uint8_t curState, co
     if (node == NULL) {
         CM_LOGE("activate dyn trans channel failed, lcid:0x%04x", param->lcid);
         (void)CM_DynTcidRelease(param->lcid, localTcid, param->expectedTransportMode);
+        CM_DynTransCancelPeerReservation(param);
         return CM_FAIL;
     }
     // 3. send establish rsp signaling
@@ -519,6 +546,7 @@ static uint32_t CM_DynTransChanPassiveEstablishedReqHandler(uint8_t curState, co
         CM_LOGE("signaling establish rsp sent failed failed, lcid:0x%04x, reqId:0x%02x", param->lcid, param->reqId);
         CM_ReleaseDynamicTransChannelByLocalTcid(node);
         (void)CM_DynTcidRelease(param->lcid, localTcid, param->expectedTransportMode);
+        CM_DynTransCancelPeerReservation(param);
         return CM_FAIL;
     }
     // 4. status indication cbk

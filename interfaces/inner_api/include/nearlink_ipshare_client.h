@@ -35,16 +35,17 @@ public:
 
     int32_t UpdateValidatedAddress(const NearlinkIpShareAddressEvidence &address) const;
     int32_t IsPeerSupported(const std::string &peerAddress, bool &supported) const;
-    int32_t StartGateway(const std::string &peerAddress) const;
+    int32_t StartGatewayAny(int32_t mode, int32_t maxTerminals) const;
+    int32_t GetSupportedMaxTerminals() const;
+    int32_t CompleteGatewayPeerRelease(uint64_t generation) const;
     int32_t StartTerminal(const std::string &gatewayAddress) const;
     int32_t Stop() const;
     int32_t GetStatus(NearlinkIpShareStatus &status) const;
     int32_t RegisterObserver(const std::shared_ptr<NearlinkIpShareObserver> &observer) const;
     int32_t UnregisterObserver() const;
-    int32_t QueryNearlinkIpShareCapabilities(const std::string &peerAddress, NearlinkIpShareCapabilities &capabilities) const;
-    int32_t StartNearlinkGatewayWithMode(const std::string &peerAddress, int32_t mode) const;
+    int32_t QueryNearlinkIpShareCapabilities(const std::string &peerAddress,
+                                             NearlinkIpShareCapabilities &capabilities) const;
     int32_t StartNearlinkTerminalWithMode(const std::string &peerAddress, int32_t mode) const;
-
 
 private:
     NearlinkIpShareClient();
@@ -53,5 +54,5 @@ private:
     std::shared_ptr<impl> pimpl_;
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // NEARLINK_IPSHARE_CLIENT_H
+} // namespace OHOS::Nearlink
+#endif // NEARLINK_IPSHARE_CLIENT_H

@@ -119,7 +119,8 @@ void NearlinkIpShareIpv6::Expire(uint64_t now)
 {
     mappings_.erase(std::remove_if(mappings_.begin(), mappings_.end(),
                                    [now](const Mapping &m) {
-                                       return m.validUntil <= now || (!m.confirmed && m.candidateUntil <= now);
+                                       return m.validUntil <= now ||
+                                              (!m.confirmed && !m.wireDadObserved && m.candidateUntil <= now);
                                    }),
                     mappings_.end());
     prefixes_.erase(
@@ -498,7 +499,12 @@ bool NearlinkIpShareIpv6::ProcessNd(const uint8_t *p, size_t n, size_t offset, b
                 other->conflict = true;
             }
         }
-        return true; // DAD records remain tentative, regardless of elapsed time.
+        // Authenticated DAD remains evidence until address validity or this channel generation ends.
+        // A quiet peer need not repeat DAD after 60s; only valid first data can confirm this record.
+        // This also keeps quiet link-local sources usable for later NUD; the mapping cap still applies.
+        // Kernel-only tentative candidates retain the short bounded admission timeout.
+        Find(target, terminal)->wireDadObserved = true;
+        return true;
     }
     if (type == 136) {
         auto other = Find(Addr(p + offset + 8), !terminal);

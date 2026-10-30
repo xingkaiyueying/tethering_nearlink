@@ -145,6 +145,7 @@
       "*TRANS_SendData*";
       "*TRANS_ChannelSetStatus*";
       "*QOSM_TransChannelCbksRegister*";
+      "*QOSM_RegisterIpSharePeerCallbacks*";
       "*QOSM_TransChannelCbksUnregister*";
       "*QOSM_TransChannelCreate*";
       "*QOSM_TransChannelDestroy*";

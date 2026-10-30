@@ -23,7 +23,7 @@
 namespace OHOS::Nearlink {
 
 int32_t NearlinkIpShareObserverStub::OnRemoteRequest(uint32_t code, MessageParcel &data, MessageParcel &reply,
-    MessageOption &option)
+                                                     MessageOption &option)
 {
     if (GetDescriptor() != data.ReadInterfaceToken()) {
         HILOGE("[IpShare][Observer] status notification rejected: interface token mismatch");
@@ -38,9 +38,9 @@ int32_t NearlinkIpShareObserverStub::OnRemoteRequest(uint32_t code, MessageParce
         return TRANSACTION_ERR;
     }
     HILOGI("[IpShare][Observer] status received role=%{public}d state=%{public}d error=%{public}d",
-        static_cast<int32_t>(status->role), static_cast<int32_t>(status->state), status->errorCode);
+           static_cast<int32_t>(status->role), static_cast<int32_t>(status->state), status->errorCode);
     OnStatusChanged(*status);
     return NO_ERROR;
 }
 
-}  // namespace OHOS::Nearlink
+} // namespace OHOS::Nearlink

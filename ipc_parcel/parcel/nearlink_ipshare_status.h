@@ -29,39 +29,43 @@ struct NearlinkIpShareAddressEvidence {
     uint32_t ifindex{0}, prefixLength{0}, flags{0}, preferredLifetime{0}, validLifetime{0};
     bool Write(Parcel &p) const
     {
-        return generation && sequence && !address.empty() && address.size() <= 45 && ifindex &&
-            prefixLength <= 128 && preferredLifetime <= validLifetime &&
-            p.WriteUint64(generation) && p.WriteUint64(sequence) && p.WriteString(address) &&
-            p.WriteUint32(ifindex) && p.WriteUint32(prefixLength) && p.WriteUint32(flags) &&
-            p.WriteUint32(preferredLifetime) && p.WriteUint32(validLifetime);
+        return generation && sequence && !address.empty() && address.size() <= 45 && ifindex && prefixLength <= 128 &&
+               preferredLifetime <= validLifetime && p.WriteUint64(generation) && p.WriteUint64(sequence) &&
+               p.WriteString(address) && p.WriteUint32(ifindex) && p.WriteUint32(prefixLength) &&
+               p.WriteUint32(flags) && p.WriteUint32(preferredLifetime) && p.WriteUint32(validLifetime);
     }
     bool Read(Parcel &p)
     {
         NearlinkIpShareAddressEvidence a;
         if (!p.ReadUint64(a.generation) || !p.ReadUint64(a.sequence) || !p.ReadString(a.address) ||
             !p.ReadUint32(a.ifindex) || !p.ReadUint32(a.prefixLength) || !p.ReadUint32(a.flags) ||
-            !p.ReadUint32(a.preferredLifetime) || !p.ReadUint32(a.validLifetime) ||
-            !a.generation || !a.sequence || a.address.empty() || a.address.size()>45 || !a.ifindex ||
-            a.prefixLength>128 || a.preferredLifetime>a.validLifetime) return false;
-        *this = a; return true;
+            !p.ReadUint32(a.preferredLifetime) || !p.ReadUint32(a.validLifetime) || !a.generation || !a.sequence ||
+            a.address.empty() || a.address.size() > 45 || !a.ifindex || a.prefixLength > 128 ||
+            a.preferredLifetime > a.validLifetime) {
+            return false;
+        }
+        *this = a;
+        return true;
     }
 };
 
 enum class NearlinkIpShareMode : int32_t { NONE = 0, IPV4 = 1, DUAL_STACK = 3 };
-inline bool IsIpShareMode(int32_t mode) { return mode == 1 || mode == 3; }
+inline bool IsIpShareMode(int32_t mode)
+{
+    return mode == 1 || mode == 3;
+}
 
 class NearlinkIpShareCapabilities final : public Parcelable {
 public:
-    bool identifierPresent {false};
-    int32_t discoveryState {0}; // 0 unknown, 1 discovered, 2 absent
-    std::vector<int32_t> localModes {1, 3};
+    bool identifierPresent{false};
+    int32_t discoveryState{0}; // 0 unknown, 1 discovered, 2 absent
+    std::vector<int32_t> localModes{1, 3};
     std::vector<int32_t> peerModes;
-    bool peerCapabilityKnown {false};
+    bool peerCapabilityKnown{false};
     bool Marshalling(Parcel &parcel) const override;
     static NearlinkIpShareCapabilities *Unmarshalling(Parcel &parcel);
     bool ReadFromParcel(Parcel &parcel);
 };
-
 
 enum class NearlinkIpShareRole : int32_t {
     NONE = 0,
@@ -84,27 +88,37 @@ enum class NearlinkIpShareState : int32_t {
     ERROR = 11,
 };
 
+struct NearlinkIpSharePeerLink {
+    uint32_t slot{0};
+    uint64_t generation{0};
+    int32_t selectedMode{0};
+    std::string ifaceName;
+    bool releasing{false};
+    bool active{true}; // False while the IP seat is reserved and its channel is being configured.
+};
+
 class NearlinkIpShareStatus final : public Parcelable {
 public:
-    NearlinkIpShareRole role {NearlinkIpShareRole::NONE};
-    NearlinkIpShareState state {NearlinkIpShareState::IDLE};
+    NearlinkIpShareRole role{NearlinkIpShareRole::NONE};
+    NearlinkIpShareState state{NearlinkIpShareState::IDLE};
     std::string peerAddress;
     std::string ifaceName;
     std::string ipv4Address;
-    bool hasUpstream {false};
+    bool hasUpstream{false};
     std::string errorStage;
-    int32_t errorCode {0};
+    int32_t errorCode{0};
     std::string contextId;
-    uint64_t generation {0};
-    uint64_t sequence {0};
-    NearlinkIpShareMode requestedMode {NearlinkIpShareMode::NONE};
-    NearlinkIpShareMode selectedMode {NearlinkIpShareMode::NONE};
-    bool serviceReady {false};
+    uint64_t generation{0};
+    uint64_t sequence{0};
+    NearlinkIpShareMode requestedMode{NearlinkIpShareMode::NONE};
+    NearlinkIpShareMode selectedMode{NearlinkIpShareMode::NONE};
+    bool serviceReady{false};
+    std::vector<NearlinkIpSharePeerLink> peerLinks; // bounded internal L3 snapshot; same-version SA/client
 
     bool Marshalling(Parcel &parcel) const override;
     static NearlinkIpShareStatus *Unmarshalling(Parcel &parcel);
     bool ReadFromParcel(Parcel &parcel);
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // NEARLINK_IPSHARE_STATUS_H
+} // namespace OHOS::Nearlink
+#endif // NEARLINK_IPSHARE_STATUS_H

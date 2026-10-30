@@ -30,5 +30,5 @@ private:
     static inline BrokerDelegator<NearlinkIpShareObserverProxy> delegator_;
 };
 
-}  // namespace OHOS::Nearlink
-#endif  // NEARLINK_IPSHARE_OBSERVER_PROXY_H
+} // namespace OHOS::Nearlink
+#endif // NEARLINK_IPSHARE_OBSERVER_PROXY_H

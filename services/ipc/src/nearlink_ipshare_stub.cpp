@@ -29,21 +29,22 @@ NearlinkIpShareStub::NearlinkIpShareStub()
     memberFuncMap_ = {
         {NL_IPSHARE_UPDATE_VALIDATED_ADDRESS, {UpdateValidatedAddressInner, permission}},
         {NL_IPSHARE_IS_PEER_SUPPORTED, {IsPeerSupportedInner, permission}},
-        {NL_IPSHARE_START_GATEWAY, {StartGatewayInner, permission}},
+        {NL_IPSHARE_START_GATEWAY_ANY, {StartGatewayAnyInner, permission}},
+        {NL_IPSHARE_SUPPORTED_MAX_TERMINALS, {GetSupportedMaxTerminalsInner, permission}},
+        {NL_IPSHARE_COMPLETE_PEER_RELEASE, {CompleteGatewayPeerReleaseInner, permission}},
         {NL_IPSHARE_START_TERMINAL, {StartTerminalInner, permission}},
         {NL_IPSHARE_STOP, {StopInner, permission}},
         {NL_IPSHARE_GET_STATUS, {GetStatusInner, permission}},
         {NL_IPSHARE_REGISTER_OBSERVER, {RegisterObserverInner, permission}},
         {NL_IPSHARE_UNREGISTER_OBSERVER, {UnregisterObserverInner, permission}},
         {NL_IPSHARE_QUERY_CAPABILITIES, {QueryNearlinkIpShareCapabilitiesInner, permission}},
-        {NL_IPSHARE_START_GATEWAY_WITH_MODE, {StartNearlinkGatewayWithModeInner, permission}},
         {NL_IPSHARE_START_TERMINAL_WITH_MODE, {StartNearlinkTerminalWithModeInner, permission}},
 
     };
 }
 
 int32_t NearlinkIpShareStub::OnRemoteRequest(uint32_t code, MessageParcel &data, MessageParcel &reply,
-    MessageOption &option)
+                                             MessageOption &option)
 {
     if (code != NL_IPSHARE_GET_STATUS) {
         HILOGI("[IpShare][IPC] server request received code=%{public}u", code);
@@ -51,8 +52,7 @@ int32_t NearlinkIpShareStub::OnRemoteRequest(uint32_t code, MessageParcel &data,
     CHECK_PERMISSION_AND_EXECUTE(NearlinkIpShareStub);
 }
 
-int32_t NearlinkIpShareStub::IsPeerSupportedInner(NearlinkIpShareStub *stub, MessageParcel &data,
-    MessageParcel &reply)
+int32_t NearlinkIpShareStub::IsPeerSupportedInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
 {
     std::string address;
     if (!data.ReadString(address)) {
@@ -69,25 +69,37 @@ int32_t NearlinkIpShareStub::IsPeerSupportedInner(NearlinkIpShareStub *stub, Mes
     return NO_ERROR;
 }
 
-int32_t NearlinkIpShareStub::StartGatewayInner(NearlinkIpShareStub *stub, MessageParcel &data,
-    MessageParcel &reply)
+int32_t NearlinkIpShareStub::CompleteGatewayPeerReleaseInner(NearlinkIpShareStub *stub, MessageParcel &data,
+                                                             MessageParcel &reply)
 {
-    std::string address;
-    if (!data.ReadString(address)) {
-        HILOGE("[IpShare][IPC] gateway request rejected: address read failed");
+    uint64_t generation = 0;
+    if (data.GetReadableBytes() != sizeof(uint64_t) || !data.ReadUint64(generation) || !generation ||
+        data.GetReadableBytes() != 0) {
         return TRANSACTION_ERR;
     }
-    int32_t ret = stub->StartGateway(address);
-    if (!reply.WriteInt32(ret)) {
-        HILOGE("[IpShare][IPC] gateway response write failed ret=%{public}d", ret);
-        return TRANSACTION_ERR;
-    }
-    HILOGI("[IpShare][IPC] gateway request handled ret=%{public}d", ret);
-    return NO_ERROR;
+    return reply.WriteInt32(stub->CompleteGatewayPeerRelease(generation)) ? NO_ERROR : TRANSACTION_ERR;
 }
 
-int32_t NearlinkIpShareStub::StartTerminalInner(NearlinkIpShareStub *stub, MessageParcel &data,
-    MessageParcel &reply)
+int32_t NearlinkIpShareStub::StartGatewayAnyInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
+{
+    int32_t mode = 0, maxTerminals = 0;
+    if (data.GetReadableBytes() != 2 * sizeof(int32_t) || !data.ReadInt32(mode) || !data.ReadInt32(maxTerminals) ||
+        data.GetReadableBytes() != 0 || !IsIpShareMode(mode) || maxTerminals < 1 || maxTerminals > 32) {
+        return TRANSACTION_ERR;
+    }
+    return reply.WriteInt32(stub->StartGatewayAny(mode, maxTerminals)) ? NO_ERROR : TRANSACTION_ERR;
+}
+
+int32_t NearlinkIpShareStub::GetSupportedMaxTerminalsInner(NearlinkIpShareStub *stub, MessageParcel &data,
+                                                           MessageParcel &reply)
+{
+    if (data.GetReadableBytes() != 0) {
+        return TRANSACTION_ERR;
+    }
+    return reply.WriteInt32(stub->GetSupportedMaxTerminals()) ? NO_ERROR : TRANSACTION_ERR;
+}
+
+int32_t NearlinkIpShareStub::StartTerminalInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
 {
     std::string address;
     if (!data.ReadString(address)) {
@@ -126,15 +138,11 @@ int32_t NearlinkIpShareStub::GetStatusInner(NearlinkIpShareStub *stub, MessagePa
     }
     if (ret != 0) {
         HILOGE("[IpShare][IPC] status request handled with failure ret=%{public}d", ret);
-    } else {
-        HILOGD("[IpShare][IPC] status request handled role=%{public}d state=%{public}d error=%{public}d",
-            static_cast<int32_t>(status.role), static_cast<int32_t>(status.state), status.errorCode);
     }
     return NO_ERROR;
 }
 
-int32_t NearlinkIpShareStub::RegisterObserverInner(NearlinkIpShareStub *stub, MessageParcel &data,
-    MessageParcel &reply)
+int32_t NearlinkIpShareStub::RegisterObserverInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
 {
     sptr<IRemoteObject> remote = data.ReadRemoteObject();
     sptr<INearlinkIpShareObserver> observer = iface_cast<INearlinkIpShareObserver>(remote);
@@ -152,7 +160,7 @@ int32_t NearlinkIpShareStub::RegisterObserverInner(NearlinkIpShareStub *stub, Me
 }
 
 int32_t NearlinkIpShareStub::UnregisterObserverInner(NearlinkIpShareStub *stub, MessageParcel &data,
-    MessageParcel &reply)
+                                                     MessageParcel &reply)
 {
     (void)data;
     int32_t ret = stub->UnregisterObserver();
@@ -164,38 +172,40 @@ int32_t NearlinkIpShareStub::UnregisterObserverInner(NearlinkIpShareStub *stub, 
     return NO_ERROR;
 }
 
-int32_t NearlinkIpShareStub::QueryNearlinkIpShareCapabilitiesInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
+int32_t NearlinkIpShareStub::QueryNearlinkIpShareCapabilitiesInner(NearlinkIpShareStub *stub, MessageParcel &data,
+                                                                   MessageParcel &reply)
 {
     std::string address;
-    if (!data.ReadString(address) || address.size() != 17) return TRANSACTION_ERR;
+    if (!data.ReadString(address) || address.size() != 17) {
+        return TRANSACTION_ERR;
+    }
     NearlinkIpShareCapabilities capabilities;
     int32_t ret = stub->QueryNearlinkIpShareCapabilities(address, capabilities);
     return reply.WriteInt32(ret) && (ret != 0 || reply.WriteParcelable(&capabilities)) ? NO_ERROR : TRANSACTION_ERR;
 }
 
-int32_t NearlinkIpShareStub::StartNearlinkGatewayWithModeInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
+int32_t NearlinkIpShareStub::StartNearlinkTerminalWithModeInner(NearlinkIpShareStub *stub, MessageParcel &data,
+                                                                MessageParcel &reply)
 {
     std::string address;
-    if (!data.ReadString(address) || address.size() != 17) return TRANSACTION_ERR;
+    if (!data.ReadString(address) || address.size() != 17) {
+        return TRANSACTION_ERR;
+    }
     int32_t mode = 0;
-    if (!data.ReadInt32(mode) || !IsIpShareMode(mode)) return TRANSACTION_ERR;
-    return reply.WriteInt32(stub->StartNearlinkGatewayWithMode(address, mode)) ? NO_ERROR : TRANSACTION_ERR;
-}
-
-int32_t NearlinkIpShareStub::StartNearlinkTerminalWithModeInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
-{
-    std::string address;
-    if (!data.ReadString(address) || address.size() != 17) return TRANSACTION_ERR;
-    int32_t mode = 0;
-    if (!data.ReadInt32(mode) || !IsIpShareMode(mode)) return TRANSACTION_ERR;
+    if (!data.ReadInt32(mode) || !IsIpShareMode(mode)) {
+        return TRANSACTION_ERR;
+    }
     return reply.WriteInt32(stub->StartNearlinkTerminalWithMode(address, mode)) ? NO_ERROR : TRANSACTION_ERR;
 }
 
-int32_t NearlinkIpShareStub::UpdateValidatedAddressInner(NearlinkIpShareStub *stub, MessageParcel &data, MessageParcel &reply)
+int32_t NearlinkIpShareStub::UpdateValidatedAddressInner(NearlinkIpShareStub *stub, MessageParcel &data,
+                                                         MessageParcel &reply)
 {
     NearlinkIpShareAddressEvidence address;
-    if (data.GetReadableBytes() > 256 || !address.Read(data) || data.GetReadableBytes() != 0) return TRANSACTION_ERR;
+    if (data.GetReadableBytes() > 256 || !address.Read(data) || data.GetReadableBytes() != 0) {
+        return TRANSACTION_ERR;
+    }
     return reply.WriteInt32(stub->UpdateValidatedAddress(address)) ? NO_ERROR : TRANSACTION_ERR;
 }
 
-}  // namespace OHOS::Nearlink
+} // namespace OHOS::Nearlink

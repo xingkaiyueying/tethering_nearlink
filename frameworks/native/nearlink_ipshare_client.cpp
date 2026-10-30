@@ -16,17 +16,17 @@
 
 #include <cstdio>
 #include <cstring>
-#include <new>
 #include <mutex>
+#include <new>
 
 #include "i_nearlink_ipshare.h"
+#include "log.h"
 #include "nearlink_errorcode.h"
 #include "nearlink_host.h"
 #include "nearlink_ipshare_client_c.h"
 #include "nearlink_ipshare_observer_stub.h"
 #include "nearlink_sa_manager.h"
 #include "nearlink_utils.h"
-#include "log.h"
 
 namespace OHOS::Nearlink {
 
@@ -39,8 +39,9 @@ public:
     {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (status.generation < generation_ ||
-                (status.generation == generation_ && status.sequence <= sequence_)) return;
+            if (status.generation < generation_ || (status.generation == generation_ && status.sequence <= sequence_)) {
+                return;
+            }
             generation_ = status.generation;
             sequence_ = status.sequence;
         }
@@ -53,10 +54,10 @@ public:
 private:
     std::weak_ptr<NearlinkIpShareObserver> observer_;
     std::mutex mutex_;
-    uint64_t generation_ {0};
-    uint64_t sequence_ {0};
+    uint64_t generation_{0};
+    uint64_t sequence_{0};
 };
-}
+} // namespace
 
 struct NearlinkIpShareClient::impl {
     impl()
@@ -70,7 +71,7 @@ struct NearlinkIpShareClient::impl {
         NearlinkSaManager::GetInstance().DeregisterFunc(profileRegisterId);
     }
 
-    int32_t profileRegisterId {INVALID_PROFILE_ID};
+    int32_t profileRegisterId{INVALID_PROFILE_ID};
     sptr<ClientObserverStub> observerStub;
 };
 
@@ -122,21 +123,28 @@ int32_t NearlinkIpShareClient::IsPeerSupported(const std::string &peerAddress, b
     return ret;
 }
 
-int32_t NearlinkIpShareClient::StartGateway(const std::string &peerAddress) const
+int32_t NearlinkIpShareClient::CompleteGatewayPeerRelease(uint64_t generation) const
 {
-    HILOGI("[IpShare][Client] gateway start requested");
-    int32_t ret = ValidateClientAddress(peerAddress);
-    if (ret != NL_NO_ERROR) {
-        return ret;
+    auto proxy = GetIpShareProxy();
+    return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->CompleteGatewayPeerRelease(generation);
+}
+
+int32_t NearlinkIpShareClient::StartGatewayAny(int32_t mode, int32_t maxTerminals) const
+{
+    if (!NearlinkHost::GetInstance().IsNearlinkSupport() || !IS_SLE_ENABLED()) {
+        return NL_ERR_SLE_OFF;
+    }
+    if (!IsIpShareMode(mode) || maxTerminals < 1 || maxTerminals > 32) {
+        return NL_ERR_INVALID_PARAM;
     }
     auto proxy = GetIpShareProxy();
-    if (proxy == nullptr) {
-        HILOGE("[IpShare][Client] gateway start failed: proxy unavailable");
-        return NL_ERR_UNAVAILABLE_PROXY;
-    }
-    ret = proxy->StartGateway(peerAddress);
-    HILOGI("[IpShare][Client] gateway start accepted ret=%{public}d", ret);
-    return ret;
+    return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->StartGatewayAny(mode, maxTerminals);
+}
+
+int32_t NearlinkIpShareClient::GetSupportedMaxTerminals() const
+{
+    auto proxy = GetIpShareProxy();
+    return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->GetSupportedMaxTerminals();
 }
 
 int32_t NearlinkIpShareClient::StartTerminal(const std::string &gatewayAddress) const
@@ -179,9 +187,6 @@ int32_t NearlinkIpShareClient::GetStatus(NearlinkIpShareStatus &status) const
     int32_t ret = proxy->GetStatus(status);
     if (ret != NL_NO_ERROR) {
         HILOGE("[IpShare][Client] status query failed ret=%{public}d", ret);
-    } else {
-        HILOGD("[IpShare][Client] status query ret=0 role=%{public}d state=%{public}d error=%{public}d",
-            static_cast<int32_t>(status.role), static_cast<int32_t>(status.state), status.errorCode);
     }
     return ret;
 }
@@ -206,7 +211,9 @@ int32_t NearlinkIpShareClient::RegisterObserver(const std::shared_ptr<NearlinkIp
     if (ret == NL_NO_ERROR) {
         pimpl_->observerStub = observerStub;
         NearlinkIpShareStatus snapshot;
-        if (proxy->GetStatus(snapshot) == 0) observerStub->OnStatusChanged(snapshot);
+        if (proxy->GetStatus(snapshot) == 0) {
+            observerStub->OnStatusChanged(snapshot);
+        }
     }
     HILOGI("[IpShare][Client] observer registration ret=%{public}d", ret);
     return ret;
@@ -227,26 +234,24 @@ int32_t NearlinkIpShareClient::UnregisterObserver() const
     return ret;
 }
 
-int32_t NearlinkIpShareClient::QueryNearlinkIpShareCapabilities(const std::string &peerAddress, NearlinkIpShareCapabilities &capabilities) const
+int32_t NearlinkIpShareClient::QueryNearlinkIpShareCapabilities(const std::string &peerAddress,
+                                                                NearlinkIpShareCapabilities &capabilities) const
 {
     int32_t ret = ValidateClientAddress(peerAddress);
-    if (ret != 0) return ret;
+    if (ret != 0) {
+        return ret;
+    }
     auto proxy = GetIpShareProxy();
-    return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->QueryNearlinkIpShareCapabilities(peerAddress, capabilities);
-}
-
-int32_t NearlinkIpShareClient::StartNearlinkGatewayWithMode(const std::string &peerAddress, int32_t mode) const
-{
-    int32_t ret = ValidateClientAddress(peerAddress);
-    if (ret != 0) return ret;
-    auto proxy = GetIpShareProxy();
-    return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->StartNearlinkGatewayWithMode(peerAddress, mode);
+    return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY
+                            : proxy->QueryNearlinkIpShareCapabilities(peerAddress, capabilities);
 }
 
 int32_t NearlinkIpShareClient::StartNearlinkTerminalWithMode(const std::string &peerAddress, int32_t mode) const
 {
     int32_t ret = ValidateClientAddress(peerAddress);
-    if (ret != 0) return ret;
+    if (ret != 0) {
+        return ret;
+    }
     auto proxy = GetIpShareProxy();
     return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->StartNearlinkTerminalWithMode(peerAddress, mode);
 }
@@ -257,15 +262,14 @@ int32_t NearlinkIpShareClient::UpdateValidatedAddress(const NearlinkIpShareAddre
     return proxy == nullptr ? NL_ERR_UNAVAILABLE_PROXY : proxy->UpdateValidatedAddress(address);
 }
 
-}  // namespace OHOS::Nearlink
+} // namespace OHOS::Nearlink
 
 namespace {
-template <size_t Size>
-void CopyText(char (&destination)[Size], const std::string &source)
+template <size_t Size> void CopyText(char (&destination)[Size], const std::string &source)
 {
     (void)std::snprintf(destination, Size, "%s", source.c_str());
 }
-}
+} // namespace
 
 extern "C" int32_t NlIpShareIsPeerSupported(const char *peerAddress, int32_t *supported)
 {
@@ -277,15 +281,6 @@ extern "C" int32_t NlIpShareIsPeerSupported(const char *peerAddress, int32_t *su
     int32_t ret = OHOS::Nearlink::NearlinkIpShareClient::GetInstance().IsPeerSupported(peerAddress, value);
     *supported = value ? 1 : 0;
     return ret;
-}
-
-extern "C" int32_t NlIpShareStartGateway(const char *peerAddress)
-{
-    if (peerAddress == nullptr) {
-        HILOGE("[IpShare][Client] C gateway start failed: null peer");
-        return OHOS::Nearlink::NL_ERR_INVALID_PARAM;
-    }
-    return OHOS::Nearlink::NearlinkIpShareClient::GetInstance().StartGateway(peerAddress);
 }
 
 extern "C" int32_t NlIpShareStartTerminal(const char *gatewayAddress)
@@ -332,41 +327,58 @@ extern "C" int32_t NlIpShareGetStatus(NlIpShareStatusC *status)
     return OHOS::Nearlink::NL_NO_ERROR;
 }
 
-extern "C" int32_t NlIpShareStartGatewayWithMode(const char *peerAddress, int32_t mode)
-{
-    if (peerAddress == nullptr || !OHOS::Nearlink::IsIpShareMode(mode)) return -1;
-    return OHOS::Nearlink::NearlinkIpShareClient::GetInstance().StartNearlinkGatewayWithMode(peerAddress, mode);
-}
-
 extern "C" int32_t NlIpShareStartTerminalWithMode(const char *peerAddress, int32_t mode)
 {
-    if (peerAddress == nullptr || !OHOS::Nearlink::IsIpShareMode(mode)) return -1;
+    if (peerAddress == nullptr || !OHOS::Nearlink::IsIpShareMode(mode)) {
+        return -1;
+    }
     return OHOS::Nearlink::NearlinkIpShareClient::GetInstance().StartNearlinkTerminalWithMode(peerAddress, mode);
 }
 
 extern "C" int32_t NlIpShareQueryCapabilities(const char *peerAddress, NlIpShareCapabilitiesC *capabilities)
 {
-    if (peerAddress == nullptr || capabilities == nullptr) return -1;
+    if (peerAddress == nullptr || capabilities == nullptr) {
+        return -1;
+    }
     OHOS::Nearlink::NearlinkIpShareCapabilities value;
-    int32_t ret = OHOS::Nearlink::NearlinkIpShareClient::GetInstance().QueryNearlinkIpShareCapabilities(peerAddress, value);
-    if (ret != 0) return ret;
+    int32_t ret =
+        OHOS::Nearlink::NearlinkIpShareClient::GetInstance().QueryNearlinkIpShareCapabilities(peerAddress, value);
+    if (ret != 0) {
+        return ret;
+    }
     *capabilities = {};
     capabilities->identifierPresent = value.identifierPresent;
     capabilities->discoveryState = value.discoveryState;
     capabilities->localModeCount = value.localModes.size();
     capabilities->peerModeCount = value.peerModes.size();
     capabilities->peerCapabilityKnown = value.peerCapabilityKnown;
-    for (size_t i = 0; i < value.localModes.size(); ++i) capabilities->localModes[i] = value.localModes[i];
-    for (size_t i = 0; i < value.peerModes.size(); ++i) capabilities->peerModes[i] = value.peerModes[i];
+    for (size_t i = 0; i < value.localModes.size(); ++i) {
+        capabilities->localModes[i] = value.localModes[i];
+    }
+    for (size_t i = 0; i < value.peerModes.size(); ++i) {
+        capabilities->peerModes[i] = value.peerModes[i];
+    }
     return 0;
 }
 
 extern "C" int32_t NlIpShareUpdateValidatedAddress(const NlIpShareIpv6AddressC *address)
 {
-    if (!address || strnlen(address->address, sizeof(address->address)) >= sizeof(address->address)) return -1;
+    if (!address || strnlen(address->address, sizeof(address->address)) >= sizeof(address->address)) {
+        return -1;
+    }
     OHOS::Nearlink::NearlinkIpShareAddressEvidence value;
-    value.generation = address->generation; value.sequence = address->sequence; value.address = address->address;
-    value.ifindex = address->ifindex; value.prefixLength = address->prefixLength; value.flags = address->flags;
-    value.preferredLifetime = address->preferredLifetime; value.validLifetime = address->validLifetime;
+    value.generation = address->generation;
+    value.sequence = address->sequence;
+    value.address = address->address;
+    value.ifindex = address->ifindex;
+    value.prefixLength = address->prefixLength;
+    value.flags = address->flags;
+    value.preferredLifetime = address->preferredLifetime;
+    value.validLifetime = address->validLifetime;
     return OHOS::Nearlink::NearlinkIpShareClient::GetInstance().UpdateValidatedAddress(value);
+}
+
+extern "C" int32_t NlIpShareStartGatewayAny(int32_t mode, int32_t maxTerminals)
+{
+    return OHOS::Nearlink::NearlinkIpShareClient::GetInstance().StartGatewayAny(mode, maxTerminals);
 }

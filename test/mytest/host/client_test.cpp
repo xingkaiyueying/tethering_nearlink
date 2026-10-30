@@ -51,7 +51,7 @@ int main()
     Response(2,0); assert(configured == 2); // duplicate enable response is consumed once
     Discover(); Capability(1); assert(g_selectedMode == 1 && methodCalls == 3);
     Discover(); Capability(3); int before = methodCalls;
-    Response(1,255); assert(methodCalls == before+1 && g_selectedMode == 1 && g_retried && rollbacks == 1);
+    Response(1,7); assert(methodCalls == before+1 && g_selectedMode == 1 && g_retried && rollbacks == 1);
     Response(1,255); assert(methodCalls == before+1 && g_clientAppId == -1 && failures == 1);
     Discover(); Capability(3); secure = false; before = methodCalls;
     Response(1,255); assert(methodCalls == before && failures == 2 && g_clientAppId == -1);
@@ -70,4 +70,13 @@ int main()
     assert(IposlCodecGatewayModes(alternate,sizeof(alternate),&modes) && modes == 3);
     alternate[3] = 1; assert(!IposlCodecGatewayModes(alternate,sizeof(alternate),&modes));
     for (size_t n = 0; n < sizeof(alternate); ++n) assert(!IposlCodecGatewayModes(alternate,n,&modes));
+    Discover(); Capability(3); before=methodCalls;
+    int oldRollbacks=rollbacks;
+    Response(1,0xfe);
+    assert(methodCalls==before && g_selectedMode==3 && !g_retried && rollbacks==oldRollbacks);
+    assert(g_clientAppId==-1 && failures==8); // busy never downgrades the requested mode
+    reserveFails = false;
+    Discover(); Capability(3); before=methodCalls;
+    Response(1,255);
+    assert(methodCalls==before && !g_retried && failures==9 && g_clientAppId==-1);
 }

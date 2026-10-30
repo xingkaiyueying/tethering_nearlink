@@ -16,8 +16,8 @@
 #define NEARLINK_IPSHARE_IPV6_H
 
 #include <array>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace OHOS::Nearlink {
@@ -35,6 +35,7 @@ public:
         uint64_t preferredUntil{0};
         uint64_t validUntil{0};
         uint64_t kernelUntil{0};
+        bool wireDadObserved{false}; // authenticated wire DAD evidence; not confirmation
     };
     struct Prefix {
         Address address{};

@@ -29,4 +29,4 @@ extern const uint8_t g_iposlEmptyState[IPOSL_EMPTY_STATE_LEN];
 extern const uint8_t g_iposlGatewayCapability[IPOSL_GATEWAY_CAPABILITY_LEN];
 extern const uint8_t g_iposlGatewayServing[IPOSL_GATEWAY_CAPABILITY_LEN];
 
-#endif  // IPOSL_CODEC_H
+#endif // IPOSL_CODEC_H

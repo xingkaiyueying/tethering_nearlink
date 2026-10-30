@@ -22,7 +22,8 @@ namespace OHOS::Nearlink {
 
 NearlinkIpShareObserverProxy::NearlinkIpShareObserverProxy(const sptr<IRemoteObject> &impl)
     : IRemoteProxy<INearlinkIpShareObserver>(impl)
-{}
+{
+}
 
 void NearlinkIpShareObserverProxy::OnStatusChanged(const NearlinkIpShareStatus &status)
 {
@@ -44,7 +45,7 @@ void NearlinkIpShareObserverProxy::OnStatusChanged(const NearlinkIpShareStatus &
         return;
     }
     HILOGI("[IpShare][Observer] status notification sent role=%{public}d state=%{public}d error=%{public}d",
-        static_cast<int32_t>(status.role), static_cast<int32_t>(status.state), status.errorCode);
+           static_cast<int32_t>(status.role), static_cast<int32_t>(status.state), status.errorCode);
 }
 
-}  // namespace OHOS::Nearlink
+} // namespace OHOS::Nearlink

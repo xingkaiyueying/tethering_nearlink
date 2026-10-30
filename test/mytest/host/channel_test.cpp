@@ -14,8 +14,9 @@
 static int creates, destroys, tunWrites, sent;
 static uint8_t sentPi;
 static bool secure = true;
+static uint32_t destroyResult;
 extern "C" uint32_t QOSM_TransChannelCreate(const QOSM_TransChannelParams_S *) { ++creates; return 0; }
-extern "C" uint32_t QOSM_TransChannelDestroy(const QOSM_TransChannelReleaseParams_S *) { ++destroys; return 0; }
+extern "C" uint32_t QOSM_TransChannelDestroy(const QOSM_TransChannelReleaseParams_S *) { ++destroys; return destroyResult; }
 extern "C" int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *, uint16_t, uint64_t gen)
 {
     if (!OHOS::Nearlink::NearlinkIpShareService::CanSend(lcid, tcid, pi, gen)) return -1;
@@ -25,16 +26,16 @@ namespace OHOS::Nearlink {
 bool NearlinkIpShareService::CanSend(uint16_t l, uint8_t t, uint8_t p, uint64_t g)
 { return secure && NearlinkIpShareChannel::GetInstance().CanSend(l,t,p,g); }
 NearlinkIpShareTun::~NearlinkIpShareTun() {}
-int32_t NearlinkIpShareTun::Open(const PacketCallback &) { fd_ = 1; return 0; }
+int32_t NearlinkIpShareTun::Open(const PacketCallback &, const std::string &) { fd_ = 1; return 0; }
 void NearlinkIpShareTun::Close() { fd_ = -1; }
 int32_t NearlinkIpShareTun::Write(const uint8_t *, uint16_t) { ++tunWrites; return fd_ >= 0 ? 0 : -1; }
 bool NearlinkIpShareTun::IsOpen() const { return fd_ >= 0; }
-bool NearlinkIpShareTun::ParseIpv6Evidence(const std::string &text,uint32_t index,uint8_t *out)
+bool NearlinkIpShareTun::ParseIpv6Evidence(const std::string &text,uint32_t index,uint8_t *out,const std::string &)
 {
     if (text != "fe80::42" || index != 7) return false;
     auto address = Lla(0x42); std::copy(address.begin(), address.end(), out); return true;
 }
-bool NearlinkIpShareTun::IsIpv6AddressUsable(const uint8_t *) { return true; } // kernel boundary
+bool NearlinkIpShareTun::IsIpv6AddressUsable(const uint8_t *,const std::string &) { return true; } // kernel boundary
 }
 int main()
 {
@@ -44,11 +45,18 @@ int main()
     assert(c.Initialize([](bool,int32_t,uint64_t){}) == 0);
     assert(!registered[1] && !registered[2]);
     assert(c.SetPeer(peer,0,true,peer,local,10) == 0 && c.CreateTun() == 0);
-    assert(!c.IsAcceptingPort(c.IP_SHARE_PORT));
+    SLE_Addr_S peerAddrForAdmission = {};
+    memcpy(peerAddrForAdmission.addr, peer, 6);
+    assert(!c.IsAcceptingPort(&peerAddrForAdmission, c.IP_SHARE_PORT));
     failPi = 2; assert(c.PrepareMode(3) != 0 && !registered[1] && !registered[2]);
     failPi = 0; assert(c.PrepareMode(3) == 0 && registered[1] && registered[2]);
     assert(c.EnableMode(1) != 0 && c.EnableMode(3) == 0 && c.Open(peer,0) == 0);
-    QOSM_TransChannelRspParams_S rsp = {};
+    // Passive admission must bind to the authenticated peer before a delayed QoSM status arrives.
+    auto wrongPeer = peerAddrForAdmission;
+    wrongPeer.addr[1] ^= 1;
+    assert(!c.IsAcceptingPort(&wrongPeer, c.IP_SHARE_PORT));
+    assert(!c.IsAcceptingPort(&peerAddrForAdmission, c.IP_SHARE_PORT)); // active create is already pending
+    QOSM_TransChannelRspParams_S rsp = {}; rsp.mtu=1500;
     memcpy(rsp.addr.addr,peer,6); rsp.srcPort = rsp.dstPort = c.IP_SHARE_PORT;
     rsp.lcid = 3; rsp.tcid = 4; rsp.status = QOSM_TRANS_CHANNEL_ESTABLISHED;
     c.HandleChannelStatus(&rsp);
@@ -104,6 +112,28 @@ int main()
         ProbeDhcp(dhcp,m,peer);
         assert(c.AuthorizePacket(dhcp,300,10,m == 1 || m == 3));
     }
+    NearlinkIpShareChannel isolated;
+    isolated.active_=isolated.enabled_=isolated.channelEstablished_=true;
+    isolated.generation_=20;isolated.gateway_=true;isolated.ifaceName_="sleip1";
+    uint8_t otherPeer[6]={2,1,2,3,4,6};memcpy(isolated.clientKey_,otherPeer,6);
+    for(uint8_t message : {1,2,3,5}) {
+        ProbeDhcp(dhcp,message,otherPeer);
+        for(unsigned offset : {14u,46u,275u,281u}) if(dhcp[offset]==77) dhcp[offset]=78;
+        dhcp[10]=dhcp[11]=0;ProbePut16(dhcp+10,ProbeChecksum(dhcp,20,0));
+        if(message==2) {
+            uint8_t wrongReply[300];ProbeDhcp(wrongReply,2,peer);
+            assert(!isolated.AuthorizePacket(wrongReply,300,20,false)); // another peer's OFFER
+            auto xid=dhcp[35];dhcp[35]^=1;
+            assert(!isolated.AuthorizePacket(dhcp,300,20,false));dhcp[35]=xid;
+        }
+        assert(isolated.AuthorizePacket(dhcp,300,20,message==1 || message==3));
+    }
+    assert(c.boundIp_!=isolated.boundIp_);
+    ProbeData(packet,1,false,peer,local,1);
+    assert(!isolated.AuthorizePacket(packet,1500,20,true)); // first peer's source cannot enter second link
+    packet[14]=78;packet[10]=packet[11]=0;ProbePut16(packet+10,ProbeChecksum(packet,20,0));
+    assert(isolated.AuthorizePacket(packet,1500,20,true));
+    assert(!c.AuthorizePacket(packet,1500,10,true));
     for (uint8_t round = 0; round < 8; ++round) for (uint8_t pi : {1,2}) {
         ProbeData(packet,pi,true,local,peer,round); assert(c.Send(packet,1500) == 0 && sentPi == pi);
         ProbeData(buffer.data,pi,false,peer,local,round); info.pi = pi;
@@ -121,5 +151,37 @@ int main()
     assert(c.SetPeer(peer,0,true,peer,local,12) == 0 && c.PrepareMode(3) == 0);
     assert(c.PrepareMode(0) == 0 && !registered[1] && !registered[2]);
     assert(c.PrepareMode(1) == 0 && !registered[2]); // explicit fallback resource rollback
-    c.Close(); c.Deinitialize();
+    c.Close();
+    assert(c.SetPeer(peer,0,true,peer,local,13)==0 && c.PrepareMode(1)==0);
+    assert(c.CreateTun()==0 && c.EnableMode(1)==0 && c.Open(peer,0)==0);
+    rsp.status=QOSM_TRANS_CHANNEL_ESTABLISHED; rsp.mtu=1499; rsp.lcid=20; rsp.tcid=21;
+    destroyResult=1;
+    c.HandleChannelStatus(&rsp);
+    assert(c.releasing_ && c.lcid_==20 && c.tcid_==21 && !c.IsDrained());
+    auto unrelated=rsp;unrelated.tcid=22;
+    c.HandleChannelStatus(&unrelated);
+    assert(c.lcid_==20 && c.tcid_==21 && c.releasing_);
+    c.Close();assert(!c.IsDrained());
+    rsp.status=QOSM_TRANS_CHANNEL_RELEASE_FAIL;c.HandleChannelStatus(&rsp);
+    assert(c.releasing_ && !c.IsDrained());
+    destroyResult=0;c.Close();assert(!c.IsDrained());
+    rsp.status=QOSM_TRANS_CHANNEL_RELEASED;c.HandleChannelStatus(&rsp);
+    assert(c.IsDrained());
+    assert(c.SetPeer(peer,0,true,peer,local,14)==0);
+    for (int n=0;n<1000;++n) c.RecordPacketErrorLocked(false,"DTAP_SEND",-7);
+    assert(c.sendErrors_.total==1000 && c.sendErrors_.reported==1);
+    assert(c.receiveErrors_.total==0);
+    c.sendErrors_.lastReport-=std::chrono::seconds(6);
+    c.RecordPacketErrorLocked(false,"DTAP_SEND",-8);
+    assert(c.sendErrors_.total==1001 && c.sendErrors_.reported==1001);
+    c.RecordPacketErrorLocked(true,"TUN_WRITE",-9);
+    c.RecordPacketErrorLocked(true,"TUN_WRITE",-9);
+    assert(c.receiveErrors_.total==2 && c.receiveErrors_.reported==1);
+    c.Close();assert(c.receiveErrors_.reported==2);
+    assert(c.SetPeer(peer,0,true,peer,local,15)==0);
+    assert(c.sendErrors_.total==0 && c.receiveErrors_.total==0);
+    c.RecordPacketErrorLocked(false,"DTAP_SEND",-7);
+    assert(c.sendErrors_.reported==1); // a new session retains its first error
+    c.Close();
+    c.Deinitialize();
 }
