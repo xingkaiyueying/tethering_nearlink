@@ -28,17 +28,20 @@ int main()
     assert(!value.Marshalling(bad));
     NearlinkIpShareStatus gateway;
     gateway.role=NearlinkIpShareRole::GATEWAY; gateway.requestedMode=NearlinkIpShareMode::DUAL_STACK;
-    gateway.peerLinks={{0,10,1,"sleip0",false,false},{1,11,3,"sleip1",true,true}};
+    gateway.peerLinks={{0,10,1,"sleip0",false,false},{1,11,3,"sleip0",true,true}};
+    gateway.peerLinks[0].ipv4Address="172.24.0.2";gateway.peerLinks[0].ipv4LeaseLifetime=120;
+    gateway.peerLinks[1].ipv6Addresses={{"fe80::42",90,120},{"fd77::42",80,100}};
     Parcel peers;assert(gateway.Marshalling(peers));
     NearlinkIpShareStatus peerCopy;assert(peerCopy.ReadFromParcel(peers));
     assert(peerCopy.peerLinks.size()==2 && peerCopy.peerLinks[1].releasing);
+    assert(peerCopy.peerLinks[0].ipv4LeaseLifetime==120&&peerCopy.peerLinks[1].ipv6Addresses[1].validLifetime==100);
     assert(!peerCopy.peerLinks[0].active && peerCopy.peerLinks[1].active);
     for(size_t n=0;n<peers.bytes.size();++n) {
         Parcel truncated;truncated.bytes.assign(peers.bytes.begin(),peers.bytes.begin()+n);
         NearlinkIpShareStatus target;assert(!target.ReadFromParcel(truncated));
     }
     gateway.peerLinks[1].slot=0;Parcel dup;assert(!gateway.Marshalling(dup));
-    gateway.peerLinks[1].slot=1;gateway.peerLinks[1].ifaceName="sleip0";assert(!gateway.Marshalling(dup));
+    gateway.peerLinks[1].slot=1;gateway.peerLinks[1].ifaceName="sleip1";assert(!gateway.Marshalling(dup));
     gateway.peerLinks.resize(33);assert(!gateway.Marshalling(dup));
     NearlinkIpShareCapabilities cap; cap.identifierPresent = true; cap.discoveryState = 1;
     cap.peerModes = {1,3}; cap.peerCapabilityKnown = true;

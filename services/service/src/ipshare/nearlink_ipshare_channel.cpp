@@ -15,12 +15,14 @@
 #include "nearlink_ipshare_channel.h"
 
 #include <algorithm>
+#include <arpa/inet.h>
 #include <cstring>
 #include <vector>
 
 #include "iposl_profile.h"
 #include "log.h"
 #include "nearlink_ipshare_service.h"
+#include "nearlink_ipshare_link.h"
 #include "sdf_buff.h"
 
 namespace OHOS::Nearlink {
@@ -323,6 +325,72 @@ int32_t NearlinkIpShareChannel::CreateTun(const std::string &ifaceName)
     return 0;
 }
 
+void NearlinkIpShareChannel::AttachLink(const std::shared_ptr<NearlinkIpShareLink> &link)
+{
+    std::lock_guard lock(mutex_);
+    link_ = link;
+    ifaceName_ = "sleip0";
+}
+
+bool NearlinkIpShareChannel::OwnsAddress(const uint8_t *address, bool ipv6, bool tentative)
+{
+    std::lock_guard lock(mutex_);
+    if (!active_ || !enabled_ || !channelEstablished_) {
+        return false;
+    }
+    if (!ipv6) {
+        return DhcpBoundLocked() && ReadUint32(address) == boundIp_;
+    }
+    if (mode_ != 3) {
+        return false;
+    }
+    auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    ipv6_.Expire(now);
+    return std::any_of(ipv6_.Mappings().begin(), ipv6_.Mappings().end(), [&](const auto &mapping) {
+        return mapping.terminal && std::equal(mapping.address.begin(), mapping.address.end(), address) &&
+               (tentative || (mapping.confirmed && !mapping.conflict));
+    });
+}
+
+bool NearlinkIpShareChannel::MatchesDhcpReply(const DhcpPacket &packet)
+{
+    std::lock_guard lock(mutex_);
+    return active_ && enabled_ && channelEstablished_ && !packet.request &&
+           std::chrono::steady_clock::now() < transactionExpiry_ && packet.xid == dhcpXid_ &&
+           memcmp(dhcpKey_, packet.key, sizeof(dhcpKey_)) == 0;
+}
+
+void NearlinkIpShareChannel::ExportAddresses(NearlinkIpSharePeerLink &status)
+{
+    std::lock_guard lock(mutex_);
+    if (!active_ || !enabled_ || !channelEstablished_ || status.generation != generation_) {
+        return;
+    }
+    char text[INET6_ADDRSTRLEN]{};
+    if (DhcpBoundLocked()) {
+        uint32_t address = htonl(boundIp_);
+        if (inet_ntop(AF_INET, &address, text, sizeof(text))) {
+            status.ipv4Address = text;
+            auto remaining = std::chrono::duration_cast<std::chrono::seconds>(
+                leaseExpiry_ - std::chrono::steady_clock::now()).count();
+            status.ipv4LeaseLifetime = static_cast<uint32_t>(std::max<int64_t>(0, remaining));
+        }
+    }
+    auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    ipv6_.Expire(now);
+    for (const auto &mapping : ipv6_.Mappings()) {
+        if (mapping.terminal && mapping.confirmed && !mapping.conflict &&
+            inet_ntop(AF_INET6, mapping.address.data(), text, sizeof(text))) {
+            auto remaining = [now](uint64_t until) -> uint32_t {
+                return until == UINT64_MAX ? UINT32_MAX : (until > static_cast<uint64_t>(now) ? until - now : 0);
+            };
+            status.ipv6Addresses.push_back({text, remaining(mapping.preferredUntil), remaining(mapping.validUntil)});
+        }
+    }
+}
+
 int32_t NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressType, bool gateway,
                                         const uint8_t *clientKey, const uint8_t *localLayer2, uint64_t generation)
 {
@@ -336,6 +404,7 @@ int32_t NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressTy
     addressType_ = addressType;
     memcpy(localLayer2_, localLayer2, sizeof(localLayer2_));
     gateway_ = gateway;
+    link_.reset();
     ipv6_.Reset();
     addressSequence_ = 0;
     memcpy(clientKey_, clientKey == nullptr ? peer : clientKey, sizeof(clientKey_));
@@ -343,6 +412,7 @@ int32_t NearlinkIpShareChannel::SetPeer(const uint8_t peer[6], uint8_t addressTy
     dhcpRequest_ = false;
     dhcpBound_ = false;
     boundIp_ = 0;
+    subnetMask_ = 0;
     active_ = true;
     generation_ = generation;
     enabled_ = false;
@@ -496,7 +566,8 @@ bool NearlinkIpShareChannel::CanAccept(const SLE_Addr_S *addr, uint16_t port)
     std::lock_guard<std::mutex> lock(mutex_);
     const uint8_t emptyPeer[6] = {0};
     bool accept = IsIpSharePort(port) && initialized_ && enabled_ && active_ && !releasing_ && !channelPending_ &&
-                  !channelEstablished_ && tun_.IsOpen() && memcmp(peer_, emptyPeer, sizeof(peer_)) != 0;
+                  !channelEstablished_ && (tun_.IsOpen() || !link_.expired()) &&
+                  memcmp(peer_, emptyPeer, sizeof(peer_)) != 0;
     accept = accept && addr != nullptr && addr->type == addressType_ && memcmp(addr->addr, peer_, sizeof(peer_)) == 0;
     if (accept) {
         channelPending_ = true;
@@ -710,6 +781,18 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
         !NearlinkIpShareService::CanSend(info->lcid, info->tcid, info->pi, generation)) {
         return -1;
     }
+    std::shared_ptr<NearlinkIpShareLink> link;
+    {
+        std::lock_guard lock(mutex_);
+        link = link_.lock();
+    }
+    if (link) {
+        int32_t ret = link->Receive(*this, data, length, generation);
+        if (ret == 0) {
+            info->pi == 1 ? ++rx4_ : ++rx6_;
+        }
+        return ret;
+    }
     if (!AuthorizePacket(data, length, generation, true)) {
         return -1;
     }
@@ -731,10 +814,12 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
     return 0;
 }
 
-int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
+int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length, bool relayed,
+                                    uint64_t expectedGeneration)
 {
     std::vector<uint8_t> adapted;
-    if (data && length >= 48 && data[0] >> 4 == 6 && data[6] == 58 && data[40] >= 133 && data[40] <= 136) {
+    if (!relayed && data && length >= 48 && data[0] >> 4 == 6 && data[6] == 58 &&
+        data[40] >= 133 && data[40] <= 136) {
         adapted.assign(data, data + length);
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -750,7 +835,7 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
     uint64_t generation = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!active_ || !channelEstablished_) {
+        if (!active_ || !channelEstablished_ || (expectedGeneration && generation_ != expectedGeneration)) {
             if (active_) {
                 RecordPacketErrorLocked(false, "CHANNEL", -1);
             }
@@ -761,7 +846,9 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length)
         (void)DhcpBoundLocked();
         generation = generation_;
     }
-    if (!AuthorizePacket(data, length, generation, false)) {
+    if (!AuthorizePacket(data, length, generation, false, relayed)) {
+        std::lock_guard lock(mutex_);
+        RecordPacketErrorLocked(false, "ADDRESS_AUTH", -1);
         return -1;
     }
     uint8_t pi = data[0] >> 4 == 6 ? DTAP_PI_IPV6 : DTAP_PI_IPV4;
@@ -926,6 +1013,7 @@ bool NearlinkIpShareChannel::HandleDhcpRequestLocked(const DhcpPacket &packet)
         requestedIp_ = packet.requested;
         serverIp_ = packet.server;
         dhcpRequest_ = true;
+        dhcpDiscover_ = false;
     } else if (packet.message == DHCP_MESSAGE_DECLINE || packet.message == DHCP_MESSAGE_RELEASE) {
         if (!DhcpBoundLocked() || packet.requested != boundIp_) {
             return false;
@@ -969,11 +1057,14 @@ bool NearlinkIpShareChannel::HandleDhcpReplyLocked(const DhcpPacket &packet)
         return false;
     }
     boundIp_ = requestedIp_;
+    serverIp_ = packet.server;
+    subnetMask_ = packet.subnet;
     leaseExpiry_ = now + std::chrono::seconds(packet.lease);
     dhcpBound_ = true;
     dhcpRequest_ = false;
     dhcpDiscover_ = false;
-    HILOGI("[IpShare] authorized REQUEST/ACK; IPv4 binding established");
+    HILOGI("[IpShare][DHCP] binding established epoch=%{public}llu xid=%{public}u lease=%{public}u",
+           static_cast<unsigned long long>(generation_), packet.xid, packet.lease);
     return true;
 }
 
@@ -991,7 +1082,8 @@ bool NearlinkIpShareChannel::ObserveDhcp(const uint8_t *data, uint16_t length, u
     return packet.request ? HandleDhcpRequestLocked(packet) : HandleDhcpReplyLocked(packet);
 }
 
-bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received)
+bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received,
+                                             bool relayed)
 {
     uint8_t pi = data != nullptr && length != 0 && data[0] >> 4 == 6 ? 2 : 1;
     if (!IposlCodecValidatePacket(pi, data, length)) {
@@ -1007,11 +1099,17 @@ bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t lengt
             std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch())
                 .count();
         bool localControl = data[6] == 58 && length >= 48 && data[40] >= 133 && data[40] <= 136;
-        bool verifyLocal = !received && memcmp(data + 8, unspecified, 16) != 0 && (!gateway_ || localControl);
-        auto next = ipv6_;
+        bool verifyLocal = !received && !relayed && memcmp(data + 8, unspecified, 16) != 0 &&
+                           (!gateway_ || localControl);
         NearlinkIpShareIpv6::Address local{};
         std::copy(data + 8, data + 24, local.begin());
         auto now = static_cast<uint64_t>(seconds);
+        bool sharedRelay = relayed || (received && !gateway_);
+        if (!verifyLocal || ipv6_.LocalUsable(local, !gateway_, now)) {
+            return ipv6_.Authorize(data, length, gateway_ == received, received ? peer_ : localLayer2_,
+                                   now, sharedRelay);
+        }
+        auto next = ipv6_;
         // Revalidate at most once per monotonic second; generation reset and address
         // evidence still revoke cached records immediately.
         if (verifyLocal && !next.LocalUsable(local, !gateway_, now) &&
@@ -1020,7 +1118,7 @@ bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t lengt
             return false;
         }
         bool allowed = next.Authorize(data, length, gateway_ == received, received ? peer_ : localLayer2_,
-                                      static_cast<uint64_t>(seconds));
+                                      static_cast<uint64_t>(seconds), sharedRelay);
         if (allowed) {
             ipv6_ = std::move(next);
         }
@@ -1045,8 +1143,10 @@ bool NearlinkIpShareChannel::AuthorizePacket(const uint8_t *data, uint16_t lengt
     if (!active_ || !enabled_ || !channelEstablished_ || generation != generation_ || !DhcpBoundLocked()) {
         return false;
     }
-    // The negotiated Demo mode is unicast. Public Internet reply sources remain valid.
-    return ReadUint32(data + (fromClient ? IPV4_SOURCE_OFFSET : IPV4_DESTINATION_OFFSET)) == boundIp_;
+    uint32_t destination = ReadUint32(data + IPV4_DESTINATION_OFFSET);
+    bool group = destination == IPV4_BROADCAST || (destination >> 28) == 0xe ||
+                 (subnetMask_ && destination == (boundIp_ | ~subnetMask_));
+    return fromClient ? ReadUint32(data + IPV4_SOURCE_OFFSET) == boundIp_ : destination == boundIp_ || group;
 }
 
 bool NearlinkIpShareChannel::ValidateIpv4(const uint8_t *data, uint16_t length)

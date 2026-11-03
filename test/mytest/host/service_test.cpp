@@ -225,7 +225,7 @@ int main()
     profileCallbacks.onConfigured(peer,false,0,1,gatewayGen);
     profileCallbacks.onConfigured(peer,true,0,1,gatewayGen); DrainTasks();
     auto firstChannel=s.gatewayPeers_[0]->channel;
-    assert(firstChannel->tun_.IsOpen() && c.IsDrained());
+    assert(!firstChannel->tun_.IsOpen() && !firstChannel->link_.expired() && c.IsDrained());
     QOSM_TransChannelRspParams_S firstRsp={}; firstRsp.mtu=1500; memcpy(firstRsp.addr.addr,peer,6);
     firstRsp.srcPort=firstRsp.dstPort=c.IP_SHARE_PORT;
     firstRsp.lcid=13; firstRsp.tcid=4; firstRsp.status=QOSM_TRANS_CHANNEL_ESTABLISHED;
@@ -249,7 +249,7 @@ int main()
     assert(s.CompleteGatewayPeerRelease(oldEpoch+1)!=0);
     assert(s.CompleteGatewayPeerRelease(oldEpoch)==0); DrainTasks();
     assert(s.gatewayPeers_[0]==nullptr && s.GetStatus(status)==0 && status.serviceReady &&
-        status.state==NearlinkIpShareState::SERVING_NO_UPSTREAM && status.ifaceName.empty());
+        status.state==NearlinkIpShareState::SERVING_NO_UPSTREAM && status.ifaceName=="sleip0");
     assert(profileCallbacks.prepareMode(second,1,gatewayGen)==0); // released slot reusable
     assert(s.Stop()==0); DrainTasks(); s.GetStatus(status); assert(status.state==NearlinkIpShareState::IDLE);
     assert(s.StartGatewayAny(3,2)==0); DrainTasks(); s.GetStatus(status); gatewayGen=status.generation;
@@ -258,11 +258,11 @@ int main()
     assert(s.gatewayPeers_[0]!=nullptr && s.gatewayPeers_[1]!=nullptr);
     profileCallbacks.onConfigured(peer,true,0,3,gatewayGen);
     profileCallbacks.onConfigured(second,true,0,1,gatewayGen); DrainTasks();
-    assert(s.gatewayPeers_[0]->channel->tun_.IsOpen() && s.gatewayPeers_[1]->channel->tun_.IsOpen());
+    assert(!s.gatewayPeers_[0]->channel->link_.expired() && !s.gatewayPeers_[1]->channel->link_.expired());
     s.OnPeerDisconnected(address); DrainTasks();
     assert(s.CompleteGatewayPeerRelease(s.gatewayPeers_[0]->epoch)==0); DrainTasks();
     assert(s.gatewayPeers_[0]==nullptr && s.gatewayPeers_[1]!=nullptr &&
-        s.gatewayPeers_[1]->channel->tun_.IsOpen()); // A2 survives A1 departure
+        !s.gatewayPeers_[1]->channel->link_.expired()); // A2 survives A1 departure
     assert(s.Stop()==0); DrainTasks(); s.GetStatus(status); assert(status.state==NearlinkIpShareState::IDLE);
     assert(s.StartGatewayAny(1,1)==0); DrainTasks(); s.GetStatus(status); gatewayGen=status.generation;
     std::atomic<int> aResult{99}, bResult{99};

@@ -30,6 +30,7 @@
 #include "qosm_trans_channel.h"
 
 namespace OHOS::Nearlink {
+class NearlinkIpShareLink;
 
 class NearlinkIpShareChannel final : public std::enable_shared_from_this<NearlinkIpShareChannel> {
 public:
@@ -41,6 +42,8 @@ public:
     int32_t Initialize(const StateCallback &callback);
     void Deinitialize();
     int32_t CreateTun(const std::string &ifaceName = "sleip0");
+    void AttachLink(const std::shared_ptr<NearlinkIpShareLink> &link);
+    void ExportAddresses(NearlinkIpSharePeerLink &status);
     int32_t Open(const uint8_t peer[6], uint8_t addressType);
     void Close();
     int32_t SetPeer(const uint8_t peer[6], uint8_t addressType, bool gateway = true, const uint8_t *clientKey = nullptr,
@@ -65,12 +68,13 @@ public:
     NearlinkIpShareChannel &operator=(const NearlinkIpShareChannel &) = delete;
 
 private:
+    friend class NearlinkIpShareLink;
     bool ConsumeStatus(const QOSM_TransChannelRspParams_S *params);
     bool CanAccept(const SLE_Addr_S *addr, uint16_t port);
     void CancelPassive(const SLE_Addr_S *addr, uint16_t port);
     bool OwnsChannel(uint16_t lcid, uint8_t tcid);
     int Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
-    int32_t Send(const uint8_t *data, uint16_t length);
+    int32_t Send(const uint8_t *data, uint16_t length, bool relayed = false, uint64_t expectedGeneration = 0);
     void RecordPacketErrorLocked(bool received, const char *stage, int32_t code);
     struct PacketErrorState {
         uint64_t total{0};
@@ -100,7 +104,10 @@ private:
     bool HandleDhcpRequestLocked(const DhcpPacket &packet);
     bool HandleDhcpReplyLocked(const DhcpPacket &packet);
     bool ObserveDhcp(const uint8_t *data, uint16_t length, uint64_t generation);
-    bool AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received);
+    bool AuthorizePacket(const uint8_t *data, uint16_t length, uint64_t generation, bool received,
+                         bool relayed = false);
+    bool OwnsAddress(const uint8_t *address, bool ipv6, bool tentative = false);
+    bool MatchesDhcpReply(const DhcpPacket &packet);
     bool gateway_{true};
     NearlinkIpShareIpv6 ipv6_;
     uint64_t addressSequence_{0};
@@ -113,11 +120,13 @@ private:
     uint32_t requestedIp_{0};
     uint32_t serverIp_{0};
     uint32_t boundIp_{0};
+    uint32_t subnetMask_{0};
     bool dhcpRequest_{false};
     std::chrono::steady_clock::time_point leaseExpiry_{};
 
     std::mutex mutex_;
     NearlinkIpShareTun tun_;
+    std::weak_ptr<NearlinkIpShareLink> link_;
     std::string ifaceName_{"sleip0"};
     StateCallback callback_;
     uint8_t peer_[6]{};

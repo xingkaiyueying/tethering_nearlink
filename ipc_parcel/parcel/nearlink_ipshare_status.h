@@ -88,6 +88,11 @@ enum class NearlinkIpShareState : int32_t {
     ERROR = 11,
 };
 
+struct NearlinkIpSharePeerAddress {
+    std::string address;
+    uint32_t preferredLifetime{0}, validLifetime{0};
+};
+
 struct NearlinkIpSharePeerLink {
     uint32_t slot{0};
     uint64_t generation{0};
@@ -95,6 +100,9 @@ struct NearlinkIpSharePeerLink {
     std::string ifaceName;
     bool releasing{false};
     bool active{true}; // False while the IP seat is reserved and its channel is being configured.
+    std::string ipv4Address;
+    uint32_t ipv4LeaseLifetime{0};
+    std::vector<NearlinkIpSharePeerAddress> ipv6Addresses;
 };
 
 class NearlinkIpShareStatus final : public Parcelable {

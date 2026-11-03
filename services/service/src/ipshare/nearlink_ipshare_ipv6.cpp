@@ -129,16 +129,34 @@ void NearlinkIpShareIpv6::Expire(uint64_t now)
 }
 
 bool NearlinkIpShareIpv6::Authorize(const uint8_t *packet, size_t length, bool terminal, const uint8_t sender[6],
-                                    uint64_t now)
+                                    uint64_t now, bool relayed)
 {
     Expire(now);
+    if (packet && length >= 44 && (packet[6] == 6 || packet[6] == 17 || packet[6] == 44 ||
+        (packet[6] == 58 && (packet[40] < 133 || packet[40] > 137)))) {
+        auto source = Find(Addr(packet + 8), terminal);
+        if (!terminal || (source && source->confirmed && !source->conflict)) {
+            return Process(packet, length, terminal, sender, now, relayed);
+        }
+    }
     // Validate in a temporary state: a malformed final option cannot partially authorize a prefix/address.
     auto next = *this;
-    if (!next.Process(packet, length, terminal, sender, now)) {
+    next.sharedLink_ = next.sharedLink_ || relayed;
+    if (!next.Process(packet, length, terminal, sender, now, relayed)) {
         return false;
     }
     *this = std::move(next);
     return true;
+}
+
+bool NearlinkIpShareIpv6::OnLink(const uint8_t address[16], uint64_t now) const
+{
+    if (LinkLocal(Addr(address))) {
+        return true;
+    }
+    return std::any_of(prefixes_.begin(), prefixes_.end(), [&](const Prefix &prefix) {
+        return prefix.validUntil > now && std::equal(address, address + 8, prefix.address.begin());
+    });
 }
 
 uint16_t NearlinkIpShareIpv6::U16(const uint8_t *p)
@@ -253,15 +271,18 @@ bool NearlinkIpShareIpv6::Candidate(const Address &a, bool terminal, uint64_t no
             return false;
         }
     }
-    if (now >= rateUntil_) {
-        rateUntil_ = now + 60;
-        candidates_ = 0;
+    const size_t side = terminal ? 1 : 0;
+    const uint32_t limit = sharedLink_ && !terminal ? 272 : 16;
+    if (now >= rateUntil_[side]) {
+        rateUntil_[side] = now + 60;
+        candidates_[side] = 0;
     }
-    if (candidates_ >= 16 ||
-        std::count_if(mappings_.begin(), mappings_.end(), [](const Mapping &m) { return !m.confirmed; }) >= 16) {
+    if (candidates_[side] >= limit || std::count_if(mappings_.begin(), mappings_.end(), [terminal](const Mapping &m) {
+            return m.terminal == terminal && !m.confirmed;
+        }) >= limit) {
         return false;
     }
-    ++candidates_;
+    ++candidates_[side];
     mappings_.push_back({a, terminal, false, false, std::min(now + 60, valid), preferred, valid});
     return true;
 }
@@ -279,8 +300,9 @@ bool NearlinkIpShareIpv6::Confirm(const Address &a, bool terminal)
     if (m->confirmed) {
         return true;
     }
+    const unsigned limit = sharedLink_ && !terminal ? 272 : 8;
     if (std::count_if(mappings_.begin(), mappings_.end(),
-                      [terminal](const Mapping &v) { return v.terminal == terminal && v.confirmed; }) >= 8) {
+                      [terminal](const Mapping &v) { return v.terminal == terminal && v.confirmed; }) >= limit) {
         return false;
     }
     m->confirmed = true;
@@ -342,7 +364,7 @@ bool NearlinkIpShareIpv6::LearnPrefix(const uint8_t *option, uint64_t now)
 }
 
 bool NearlinkIpShareIpv6::Options(const uint8_t *p, size_t n, size_t offset, uint8_t type, bool unspecified,
-                                  const uint8_t sender[6], uint64_t now)
+                                  const uint8_t sender[6], uint64_t now, bool relayed)
 {
     bool linkOption = false;
     for (size_t i = offset; i < n;) {
@@ -352,7 +374,7 @@ bool NearlinkIpShareIpv6::Options(const uint8_t *p, size_t n, size_t offset, uin
         size_t bytes = size_t(p[i + 1]) * 8;
         if (p[i] == 1 || p[i] == 2) {
             if (bytes != 8 || linkOption || unspecified || p[i] != (type == 136 ? 2 : 1) ||
-                std::memcmp(p + i + 2, sender, 6) != 0) {
+                (!(relayed && (type == 135 || type == 136)) && std::memcmp(p + i + 2, sender, 6) != 0)) {
                 return false;
             }
             linkOption = true;
@@ -379,7 +401,8 @@ bool NearlinkIpShareIpv6::Options(const uint8_t *p, size_t n, size_t offset, uin
     return true;
 }
 
-bool NearlinkIpShareIpv6::Process(const uint8_t *p, size_t n, bool terminal, const uint8_t sender[6], uint64_t now)
+bool NearlinkIpShareIpv6::Process(const uint8_t *p, size_t n, bool terminal, const uint8_t sender[6], uint64_t now,
+                                  bool relayed)
 {
     if (!p || n < 40 || n > 1500 || p[0] >> 4 != 6 || U16(p + 4) != n - 40) {
         return false;
@@ -419,8 +442,12 @@ bool NearlinkIpShareIpv6::Process(const uint8_t *p, size_t n, bool terminal, con
                 }
             }
             auto mapping = Find(terminal ? source : destination, true);
-            return mapping && mapping->confirmed && !mapping->conflict && Unicast(source) && Unicast(destination) &&
-                   (!LinkLocal(source) || LinkLocal(destination));
+            bool multicast = destination[0] == 0xff && (destination[1] & 0x0f) >= 2 &&
+                             (destination[1] & 0x0f) <= 14;
+            bool authorized = (!terminal && multicast) || (mapping && mapping->confirmed && !mapping->conflict);
+            return authorized && Unicast(source) && (Unicast(destination) || multicast) &&
+                   (!LinkLocal(source) || LinkLocal(destination) ||
+                    (multicast && (destination[1] & 0x0f) == 2));
         }
         size_t bytes = protocol == 51 ? (size_t(p[offset + 1]) + 2) * 4 : (size_t(p[offset + 1]) + 1) * 8;
         if (bytes > n - offset || extensionBytes + bytes > 256) {
@@ -431,17 +458,18 @@ bool NearlinkIpShareIpv6::Process(const uint8_t *p, size_t n, bool terminal, con
         extensionBytes += bytes;
     }
     if (protocol == 58 && n - offset >= 4 && p[offset] >= 133 && p[offset] <= 137) {
-        return ProcessNd(p, n, offset, terminal, sender, now);
+        return ProcessNd(p, n, offset, terminal, sender, now, relayed);
     }
     return ProcessData(p, n, offset, protocol, terminal);
 }
 
 bool NearlinkIpShareIpv6::ProcessNd(const uint8_t *p, size_t n, size_t offset, bool terminal, const uint8_t sender[6],
-                                    uint64_t now)
+                                    uint64_t now, bool relayed)
 {
     Address source = Addr(p + 8), destination = Addr(p + 24);
     uint8_t type = p[offset];
     size_t fixed = type == 133 ? 8 : (type == 134 ? 16 : 24);
+    // Shared members use direct NS/NA. Redirect is disabled on the TUN and rejected here.
     if (type == 137 || n - offset < fixed || p[7] != 255 || p[offset + 1] != 0 || !Checksum(p, n, offset, 58)) {
         return false;
     }
@@ -471,20 +499,20 @@ bool NearlinkIpShareIpv6::ProcessNd(const uint8_t *p, size_t n, size_t offset, b
                 return false;
             }
         } else {
-            if (unspecified || (!Group(destination, 1) && !Known(destination, !terminal)) ||
+            if (unspecified || (!Group(destination, 1) && !Unicast(destination)) ||
                 (Group(destination, 1) && (p[offset + 4] & 0x40))) {
                 return false;
             }
             // This Demo does not proxy NA. A tentative address must never emit NA.
             auto owner = Find(target, terminal);
             auto claimant = Find(target, !terminal);
-            if (source != target || (!owner && (!claimant || claimant->confirmed)) ||
+            if (source != target || (!owner && !relayed && (!claimant || claimant->confirmed)) ||
                 !ConfirmOwner(target, terminal, now)) {
                 return false;
             }
         }
     }
-    if (!Options(p, n, offset + fixed, type, unspecified, sender, now)) {
+    if (!Options(p, n, offset + fixed, type, unspecified, sender, now, relayed)) {
         return false;
     }
     if (type == 135 && unspecified) {
@@ -514,7 +542,7 @@ bool NearlinkIpShareIpv6::ProcessNd(const uint8_t *p, size_t n, size_t offset, b
     }
     if (!unspecified && !Known(source, terminal)) {
         // RA authenticates router LLA; an RS authenticates only a candidate LLA.
-        if ((type != 133 && type != 134) || !Candidate(source, terminal, now)) {
+        if ((type != 133 && type != 134 && !relayed) || !Candidate(source, terminal, now)) {
             return false;
         }
     }
@@ -530,16 +558,18 @@ bool NearlinkIpShareIpv6::ProcessData(const uint8_t *p, size_t n, size_t offset,
     // A complete, checksummed upper-layer first packet is required before mapping promotion.
     auto sourceMap = Find(source, terminal);
     auto destinationMap = Find(destination, !terminal);
+    bool multicast = destination[0] == 0xff && (destination[1] & 0x0f) >= 2 &&
+                     (destination[1] & 0x0f) <= 14;
     if (terminal && (!sourceMap || sourceMap->conflict)) {
         return false;
     }
-    if (!terminal && (!destinationMap || !destinationMap->confirmed || destinationMap->conflict)) {
+    if (!terminal && !multicast && (!destinationMap || !destinationMap->confirmed || destinationMap->conflict)) {
         return false;
     }
-    if (!Unicast(source) || !Unicast(destination)) {
+    if (!Unicast(source) || (!Unicast(destination) && !multicast)) {
         return false;
     }
-    if (LinkLocal(source) && !LinkLocal(destination)) {
+    if (LinkLocal(source) && !LinkLocal(destination) && !(multicast && (destination[1] & 0x0f) == 2)) {
         return false;
     }
     if (terminal && !sourceMap->confirmed) {

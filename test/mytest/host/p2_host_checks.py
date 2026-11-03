@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
     shutil.copytree(here / 'stubs', out, dirs_exist_ok=True)
     for source in [*profile.glob('src/*.[ch]'), profile / 'interface/iposl_profile.h',
                    channel / 'nearlink_ipshare_channel.cpp', channel / 'nearlink_ipshare_channel.h',
-                   channel / 'nearlink_ipshare_tun.h', here.parent / 'sleip_probe_packets.h',
+                   channel / 'nearlink_ipshare_tun.h', channel / 'nearlink_ipshare_link.h', channel / 'nearlink_ipshare_link.cpp', here.parent / 'sleip_probe_packets.h',
                    channel / 'nearlink_ipshare_ipv6.h', channel / 'nearlink_ipshare_ipv6.cpp',
                    repo / 'services/stack/src/cp/bsl/sle/qosm/interface/qosm_trans_channel.h',
                    repo / 'ipc_parcel/parcel/nearlink_ipshare_status.h',
@@ -28,6 +28,8 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
                    repo / 'interfaces/def/nearlink_def_types.h',
                    repo / 'ipc_parcel/interface/nearlink_service_ipc_interface_code.h']:
         shutil.copyfile(source, out / source.name)
+    (out / 'arpa').mkdir(exist_ok=True)
+    (out / 'arpa/inet.h').write_text('#pragma once\n#include <winsock2.h>\n#include <ws2tcpip.h>\n#undef ERROR\n')
     before_ref = os.environ.get('P3_RESTART_BEFORE_REF')
     if before_ref:
         for name in ('iposl_server.c', 'iposl_client.c'):
@@ -39,6 +41,10 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
     subprocess.run([a.cc, '-std=c11', '-Wall', '-Wextra', '-Werror', '-I'+str(out),
                     '-c', str(out/'iposl_codec.c'), '-o', str(out/'codec.o')], check=True)
     for source in sorted(here.glob('*_test.cpp')):
+        if os.environ.get('P3_HOST_TEST_FILTER') and source.stem != os.environ['P3_HOST_TEST_FILTER']:
+            continue
+        if source.stem != 'service_test':
+            shutil.copyfile(here / 'stubs/nearlink_ipshare_service.h', out / 'nearlink_ipshare_service.h')
         if source.stem == 'service_test':
             for name in ('nearlink_ipshare_service.cpp', 'nearlink_ipshare_service.h'):
                 shutil.copyfile(channel / name, out / name)
@@ -77,7 +83,7 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
                 (out / 'nearlink_ipshare_service.cpp').write_text(current.replace(body(current), body(old)),
                     encoding='utf-8')
         exe = out / (source.stem + '.exe')
-        subprocess.run([a.cxx, '-std=c++17', '-pthread', '-I'+str(out), str(source), str(out/'nearlink_ipshare_ipv6.cpp'), '-o', str(exe)], check=True)
+        subprocess.run([a.cxx, '-std=c++17', '-pthread', '-I'+str(out), str(source), str(out/'nearlink_ipshare_ipv6.cpp'), *([str(out/'nearlink_ipshare_link.cpp')] if source.stem in ('channel_test','service_test','shared_link_test') else []), '-lws2_32', '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True)
         print(source.stem + '=PASS', flush=True)
 

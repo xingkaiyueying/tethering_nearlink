@@ -26,8 +26,16 @@ bool WritePeerLinks(Parcel &p, const std::vector<NearlinkIpSharePeerLink> &links
     }
     for (const auto &link : links) {
         if (!p.WriteUint32(link.slot) || !p.WriteUint64(link.generation) || !p.WriteInt32(link.selectedMode) ||
-            !p.WriteString(link.ifaceName) || !p.WriteBool(link.releasing) || !p.WriteBool(link.active)) {
+            !p.WriteString(link.ifaceName) || !p.WriteBool(link.releasing) || !p.WriteBool(link.active) ||
+            !p.WriteString(link.ipv4Address) || !p.WriteUint32(link.ipv4LeaseLifetime) ||
+            !p.WriteUint32(link.ipv6Addresses.size())) {
             return false;
+        }
+        for (const auto &address : link.ipv6Addresses) {
+            if (!p.WriteString(address.address) || !p.WriteUint32(address.preferredLifetime) ||
+                !p.WriteUint32(address.validLifetime)) {
+                return false;
+            }
         }
     }
     return true;
@@ -69,8 +77,15 @@ bool ValidStatus(const NearlinkIpShareStatus &s)
     for (const auto &link : s.peerLinks) {
         if (link.slot >= 32 || !link.generation || !IsIpShareMode(link.selectedMode) ||
             (link.selectedMode & requested) != link.selectedMode ||
-            link.ifaceName != "sleip" + std::to_string(link.slot) || (!first && link.slot <= previous)) {
+            link.ifaceName != "sleip0" || (!first && link.slot <= previous) ||
+            link.ipv4Address.size() > 15 || link.ipv6Addresses.size() > 8) {
             return false;
+        }
+        for (const auto &address : link.ipv6Addresses) {
+            if (address.address.empty() || address.address.size() > 45 ||
+                address.preferredLifetime > address.validLifetime) {
+                return false;
+            }
         }
         previous = link.slot;
         first = false;
@@ -136,8 +151,22 @@ bool NearlinkIpShareStatus::ReadFromParcel(Parcel &parcel)
         NearlinkIpSharePeerLink link;
         if (!parcel.ReadUint32(link.slot) || !parcel.ReadUint64(link.generation) ||
             !parcel.ReadInt32(link.selectedMode) || !parcel.ReadString(link.ifaceName) ||
-            !parcel.ReadBool(link.releasing) || !parcel.ReadBool(link.active)) {
+            !parcel.ReadBool(link.releasing) || !parcel.ReadBool(link.active) ||
+            !parcel.ReadString(link.ipv4Address) || !parcel.ReadUint32(link.ipv4LeaseLifetime)) {
             return false;
+        }
+        uint32_t addresses = 0;
+        if (!parcel.ReadUint32(addresses) || addresses > 8) {
+            return false;
+        }
+        for (uint32_t j = 0; j < addresses; ++j) {
+            NearlinkIpSharePeerAddress address;
+            if (!parcel.ReadString(address.address) || address.address.empty() || address.address.size() > 45 ||
+                !parcel.ReadUint32(address.preferredLifetime) || !parcel.ReadUint32(address.validLifetime) ||
+                address.preferredLifetime > address.validLifetime) {
+                return false;
+            }
+            link.ipv6Addresses.push_back(address);
         }
         value.peerLinks.push_back(link);
     }

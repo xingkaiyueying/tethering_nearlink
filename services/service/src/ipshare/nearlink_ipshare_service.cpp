@@ -24,6 +24,7 @@
 #include "iposl_profile.h"
 #include "log.h"
 #include "nearlink_ipshare_channel.h"
+#include "nearlink_ipshare_link.h"
 #include "nearlink_utils.h"
 #include "raw_address.h"
 
@@ -355,6 +356,16 @@ int32_t NearlinkIpShareService::StartGatewayAny(int32_t mode, int32_t maxTermina
         if (!IsCurrent(generation)) {
             return;
         }
+        auto sharedLink = std::make_shared<NearlinkIpShareLink>();
+        if (sharedLink->Open(generation) != 0) {
+            SetState(NearlinkIpShareState::ERROR, "shared-tun", IP_SHARE_RESOURCE_FAILED);
+            return;
+        }
+        {
+            std::lock_guard lock(mutex_);
+            gatewayLink_ = sharedLink;
+            status_.ifaceName = "sleip0";
+        }
         if (IposlProfileStartServerAny(static_cast<uint8_t>(mode), static_cast<uint32_t>(maxTerminals), generation) !=
             IPOSL_SUCCESS) {
             SetState(NearlinkIpShareState::ERROR, "gateway-listen", IP_SHARE_PROFILE_FAILED);
@@ -438,9 +449,11 @@ void NearlinkIpShareService::StopNow()
 {
     HILOGI("[IpShare][Service] stop cleanup started");
     std::vector<std::shared_ptr<NearlinkIpShareChannel>> channels;
+    std::shared_ptr<NearlinkIpShareLink> sharedLink;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         status_.state = NearlinkIpShareState::STOPPING;
+        sharedLink = gatewayLink_;
         for (auto &entry : gatewayPeers_) {
             if (entry != nullptr) {
                 entry->releasing = true;
@@ -455,6 +468,9 @@ void NearlinkIpShareService::StopNow()
         channel->Close();
     }
     NearlinkIpShareChannel::GetInstance().Close();
+    if (sharedLink) {
+        sharedLink->Close();
+    }
     bool peersDrained = IposlProfileServerIsDrained();
     for (const auto &channel : channels) {
         if (!channel->IsDrained()) {
@@ -469,6 +485,7 @@ void NearlinkIpShareService::StopNow()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         retired.swap(gatewayPeers_);
+        gatewayLink_.reset();
         gatewayAny_ = false;
         maxTerminals_ = 0;
     }
@@ -507,6 +524,11 @@ int32_t NearlinkIpShareService::GetStatus(NearlinkIpShareStatus &status) const
         return IP_SHARE_INVALID_STATE;
     }
     status = status_;
+    for (auto &link : status.peerLinks) {
+        if (link.slot < gatewayPeers_.size() && gatewayPeers_[link.slot]) {
+            gatewayPeers_[link.slot]->channel->ExportAddresses(link);
+        }
+    }
     return IP_SHARE_OK;
 }
 
@@ -671,18 +693,22 @@ void NearlinkIpShareService::HandleConfigured(const uint8_t peer[6], bool opened
             return;
         }
         std::shared_ptr<NearlinkIpShareChannel> channel;
+        std::shared_ptr<NearlinkIpShareLink> sharedLink;
+        uint64_t epoch = 0;
         size_t slot = 0;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             for (; slot < gatewayPeers_.size(); ++slot) {
                 if (gatewayPeers_[slot] != nullptr && memcmp(gatewayPeers_[slot]->address.data(), peer, 6) == 0) {
                     channel = gatewayPeers_[slot]->channel;
+                    epoch = gatewayPeers_[slot]->epoch;
+                    sharedLink = gatewayLink_;
                     break;
                 }
             }
         }
-        if (channel == nullptr || channel->EnableMode(mode) != 0 ||
-            channel->CreateTun("sleip" + std::to_string(slot)) != 0) {
+        if (channel == nullptr || !sharedLink || channel->EnableMode(mode) != 0 ||
+            !sharedLink->Add(channel, epoch)) {
             ReleaseGatewayPeer(peer, 0);
         }
         return;
@@ -768,6 +794,14 @@ void NearlinkIpShareService::SetState(NearlinkIpShareState state, const std::str
         IposlProfileStopClient();
         IposlProfileStopServer();
         NearlinkIpShareChannel::GetInstance().Close();
+        std::shared_ptr<NearlinkIpShareLink> sharedLink;
+        {
+            std::lock_guard lock(mutex_);
+            sharedLink = gatewayLink_;
+        }
+        if (sharedLink) {
+            sharedLink->Close();
+        }
     }
     NearlinkIpShareStatus status;
     sptr<INearlinkIpShareObserver> observer;
@@ -801,13 +835,11 @@ void NearlinkIpShareService::RefreshPeerLinksLocked()
         const auto &entry = gatewayPeers_[slot];
         if (entry) {
             status_.peerLinks.push_back({static_cast<uint32_t>(slot), entry->epoch, entry->selectedMode,
-                                         "sleip" + std::to_string(slot), entry->releasing, entry->active});
+                                         "sleip0", entry->releasing, entry->active});
         }
     }
-    status_.ifaceName = status_.peerLinks.empty() ? "" : status_.peerLinks.front().ifaceName;
-    status_.selectedMode = status_.peerLinks.empty()
-                               ? NearlinkIpShareMode::NONE
-                               : static_cast<NearlinkIpShareMode>(status_.peerLinks.front().selectedMode);
+    status_.ifaceName = "sleip0";
+    status_.selectedMode = status_.requestedMode;
 }
 
 void NearlinkIpShareService::StampLocked()
@@ -937,6 +969,8 @@ void NearlinkIpShareService::CheckGatewayPeerSetupTimeout(const std::array<uint8
 void NearlinkIpShareService::ReleaseGatewayPeer(const uint8_t peer[6], uint64_t epoch)
 {
     std::shared_ptr<NearlinkIpShareChannel> channel;
+    std::shared_ptr<NearlinkIpShareLink> sharedLink;
+    uint64_t memberEpoch = 0;
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -947,6 +981,11 @@ void NearlinkIpShareService::ReleaseGatewayPeer(const uint8_t peer[6], uint64_t 
         entry->releasing = true; // Occupies its seat until QoSM and TUN have drained.
         entry->setupDeadline = {};
         channel = entry->channel;
+        sharedLink = gatewayLink_;
+        memberEpoch = entry->epoch;
+    }
+    if (sharedLink) {
+        sharedLink->Remove(memberEpoch);
     }
     channel->Close(); // TUN reader joins outside the service lock.
     // Publish releasing even while a real late channel is pending; retirement still checks drain.
