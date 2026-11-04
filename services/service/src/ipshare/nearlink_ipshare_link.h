@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <vector>
 #include "nearlink_ipshare_tun.h"
 
@@ -21,6 +22,7 @@ public:
     void Close();
     bool Add(const std::shared_ptr<NearlinkIpShareChannel> &channel, uint64_t epoch);
     void Remove(uint64_t epoch);
+    void RefreshLocalAddresses(uint64_t generation);
     int32_t Receive(NearlinkIpShareChannel &source, const uint8_t *data, uint16_t length, uint64_t epoch);
 
 private:
@@ -32,14 +34,17 @@ private:
     int32_t Dispatch(NearlinkIpShareChannel *source, const uint8_t *data, uint16_t length, uint64_t epoch);
     bool SourceAllowed(NearlinkIpShareChannel &source, const uint8_t *data, uint16_t length);
     void RefreshOwnersLocked(NearlinkIpShareChannel &channel, uint64_t epoch);
+    bool IsLocalIpv6Locked(const uint8_t address[16], std::chrono::steady_clock::time_point now) const;
     void ReportLocked(const char *reason, uint64_t epoch = 0, uint8_t family = 0);
-    void TraceDnsLocked(const char *stage, const uint8_t *data, uint16_t length,
-                         uint64_t sourceEpoch, uint64_t targetEpoch = 0, int32_t code = 0);
     std::mutex mutex_;
     NearlinkIpShareTun tun_;
     uint64_t generation_{0};
     std::map<uint64_t, std::weak_ptr<NearlinkIpShareChannel>> members_;
     std::map<std::string, uint64_t> owners_;
+    std::set<std::array<uint8_t, 16>> localIpv6_;
+    uint32_t localIfindex_{0};
+    uint64_t localRefreshTicket_{0};
+    std::chrono::steady_clock::time_point localCacheUntil_{};
     struct Transaction {
         uint64_t epoch;
         std::chrono::steady_clock::time_point until;
@@ -47,8 +52,6 @@ private:
     std::map<std::array<uint8_t, 10>, Transaction> transactions_;
     uint64_t local_{0}, forwarded_{0}, dropped_{0};
     std::chrono::steady_clock::time_point lastReport_{};
-    std::chrono::steady_clock::time_point traceWindow_{};
-    uint64_t traceCount_{0}, traceSuppressed_{0};
 };
 } // namespace OHOS::Nearlink
 #endif

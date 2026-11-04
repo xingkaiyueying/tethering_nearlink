@@ -14,16 +14,16 @@ static const IposlProfileCallbacks *IposlGetCallbacks(void) { static IposlProfil
 #define NLSTK_LOG_ERROR(...) ((void)0)
 typedef struct { unsigned char data[1500]; } SDF_Buff_S;
 typedef struct { int pi; uint16_t lcid; uint8_t tcid; SDF_Buff_S *buff; } DTAP_Data_S;
-static int live, mode, inCp, sends, failSend;
-static void *SDF_MemAlloc(size_t n) { live++; return malloc(n); }
+static int live, mode, inCp, sends, failSend, posts, failAlloc, failAppend;
+static void *SDF_MemAlloc(size_t n) { if(failAlloc)return NULL; live++; return malloc(n); }
 static void SDF_MemFree(void *p) { live--; free(p); }
 static SDF_Buff_S *SDF_BuffNewWithReserve(int n) { (void)n; return SDF_MemAlloc(sizeof(SDF_Buff_S)); }
-static uint8_t *SDF_BuffAppend(SDF_Buff_S *p,int n) { (void)n; return p->data; }
+static uint8_t *SDF_BuffAppend(SDF_Buff_S *p,int n) { (void)n; return failAppend?NULL:p->data; }
 static void SDF_BuffFree(SDF_Buff_S *p) { SDF_MemFree(p); }
 static int DTAP_DataSend(DTAP_Data_S *p) { assert(inCp); assert(p->buff->data[0]==0x60 && p->pi==2); sends++; if(failSend) return 7; SDF_BuffFree(p->buff); return 0; }
 static void (*pending)(void*),(*release)(void*); static void *saved;
 static uint32_t CP_PostTaskBlocked(void (*cb)(void*),void *a,void (*f)(void*),int timeout) {
- assert(timeout==500); if(mode==1) { f(a); return 1; }
+ assert(!inCp); ++posts; assert(timeout==500); if(mode==1) { f(a); return 1; }
  if(mode==2) { pending=cb; saved=a; release=f; return 2; }
  inCp=1; cb(a); inCp=0; f(a); return 0;
 }
@@ -41,4 +41,13 @@ int main(void) {
  assert(IposlProfileSendIp(1,2,2,bytes,1500,42)==7); assert(live==0);
  assert(IposlProfileSendIp(1,2,1,bytes,1500,42)!=0);
  assert(IposlProfileSendIp(1,2,2,bytes,1501,42)!=0); assert(live==0);
+ // Relay submit runs directly on CP, copies the borrowed bytes, and preserves all failure ownership rules.
+ int posted=posts,sent=sends;inCp=1;failSend=0;
+ assert(IposlProfileSendIpOnCp(1,2,2,bytes,1500,42)==0&&sends==sent+1&&posts==posted&&live==0);
+ assert(IposlProfileSendIpOnCp(1,2,2,bytes,1500,41)!=0&&sends==sent+1&&live==0);
+ assert(IposlProfileSendIpOnCp(1,2,1,bytes,1500,42)!=0&&live==0);
+ failAlloc=1;assert(IposlProfileSendIpOnCp(1,2,2,bytes,1500,42)!=0&&live==0);failAlloc=0;
+ failAppend=1;assert(IposlProfileSendIpOnCp(1,2,2,bytes,1500,42)!=0&&live==0);failAppend=0;
+ failSend=1;assert(IposlProfileSendIpOnCp(1,2,2,bytes,1500,42)==7&&live==0&&posts==posted);inCp=0;
+
 }

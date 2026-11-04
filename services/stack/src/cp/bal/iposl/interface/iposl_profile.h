@@ -78,6 +78,9 @@ void IposlProfileStopClient(void);
 int32_t IposlProfileSendIpv4(uint16_t lcid, uint8_t tcid, const uint8_t *data, uint16_t length);
 int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *data, uint16_t length,
                            uint64_t generation);
+/* CP receive callbacks only: copy the borrowed payload and submit directly on the current CP worker. */
+int32_t IposlProfileSendIpOnCp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *data, uint16_t length,
+                               uint64_t generation);
 void IposlCodecS1LinkLocal(const uint8_t layer2[6], uint8_t address[16]);
 bool IposlCodecValidatePacket(uint8_t pi, const uint8_t *data, size_t length);
 int32_t IposlCodecEncodeConfigMode(const uint8_t layer2[IPOSL_LAYER2_ID_LEN], uint8_t mode, uint8_t *out,

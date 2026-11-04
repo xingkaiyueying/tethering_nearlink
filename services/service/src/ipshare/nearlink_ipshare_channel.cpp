@@ -816,7 +816,7 @@ int NearlinkIpShareChannel::Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer)
 }
 
 int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length, bool relayed,
-                                    uint64_t expectedGeneration)
+                                    uint64_t expectedGeneration, SendContext context)
 {
     std::vector<uint8_t> adapted;
     if (!relayed && data && length >= 48 && data[0] >> 4 == 6 && data[6] == 58 &&
@@ -853,7 +853,10 @@ int32_t NearlinkIpShareChannel::Send(const uint8_t *data, uint16_t length, bool 
         return -1;
     }
     uint8_t pi = data[0] >> 4 == 6 ? DTAP_PI_IPV6 : DTAP_PI_IPV4;
-    int32_t ret = IposlProfileSendIp(lcid, tcid, pi, data, length, generation);
+    // DTAP receive callbacks already run on CP. Reposting synchronously would wait for this very callback.
+    int32_t ret = context == SendContext::CP_RELAY ?
+        IposlProfileSendIpOnCp(lcid, tcid, pi, data, length, generation) :
+        IposlProfileSendIp(lcid, tcid, pi, data, length, generation);
     if (ret != 0) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (active_ && generation == generation_) {

@@ -518,16 +518,23 @@ void NearlinkIpShareService::StopNow()
 
 int32_t NearlinkIpShareService::GetStatus(NearlinkIpShareStatus &status) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!initialized_) {
-        HILOGE("[IpShare][Service] status query rejected: not initialized");
-        return IP_SHARE_INVALID_STATE;
-    }
-    status = status_;
-    for (auto &link : status.peerLinks) {
-        if (link.slot < gatewayPeers_.size() && gatewayPeers_[link.slot]) {
-            gatewayPeers_[link.slot]->channel->ExportAddresses(link);
+    std::shared_ptr<NearlinkIpShareLink> sharedLink;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!initialized_) {
+            HILOGE("[IpShare][Service] status query rejected: not initialized");
+            return IP_SHARE_INVALID_STATE;
         }
+        status = status_;
+        sharedLink = gatewayLink_;
+        for (auto &link : status.peerLinks) {
+            if (link.slot < gatewayPeers_.size() && gatewayPeers_[link.slot]) {
+                gatewayPeers_[link.slot]->channel->ExportAddresses(link);
+            }
+        }
+    }
+    if (sharedLink) {
+        sharedLink->RefreshLocalAddresses(status.generation);
     }
     return IP_SHARE_OK;
 }

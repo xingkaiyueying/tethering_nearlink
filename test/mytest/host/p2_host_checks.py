@@ -12,6 +12,7 @@ p.add_argument('--cc', default='gcc')
 a = p.parse_args()
 here = Path(__file__).resolve().parent
 subprocess.run([__import__('sys').executable, str(here / 'peer_initializer_host_check.py'), a.cxx], check=True)
+subprocess.run([__import__('sys').executable, str(here / 'local_ipv6_cache_host_check.py'), a.cxx], check=True)
 repo = here.parents[2]
 profile = repo / 'services/stack/src/cp/bal/iposl'
 channel = repo / 'services/service/src/ipshare'

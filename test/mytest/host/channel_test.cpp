@@ -26,9 +26,14 @@ extern "C" int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, c
     if (!OHOS::Nearlink::NearlinkIpShareService::CanSend(lcid, tcid, pi, gen)) return -1;
     ++sent; sentPi = pi; return 0;
 }
+extern "C" int32_t IposlProfileSendIpOnCp(uint16_t l,uint8_t t,uint8_t pi,const uint8_t *p,uint16_t n,uint64_t g)
+{ return IposlProfileSendIp(l,t,pi,p,n,g); }
 namespace OHOS::Nearlink {
 bool NearlinkIpShareService::CanSend(uint16_t l, uint8_t t, uint8_t p, uint64_t g)
 { return secure && NearlinkIpShareChannel::GetInstance().CanSend(l,t,p,g); }
+bool NearlinkIpShareTun::ReadLocalIpv6Addresses(uint32_t &index,
+    std::vector<std::array<uint8_t,16>> &addresses,const std::string &)
+{ index=7;addresses.clear();return true; }
 NearlinkIpShareTun::~NearlinkIpShareTun() {}
 int32_t NearlinkIpShareTun::Open(const PacketCallback &, const std::string &) { fd_ = 1; return 0; }
 void NearlinkIpShareTun::Close() { fd_ = -1; }

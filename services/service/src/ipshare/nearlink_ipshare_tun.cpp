@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <fcntl.h>
@@ -165,6 +166,58 @@ bool NearlinkIpShareTun::IsOpen() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return fd_ >= 0;
+}
+
+static bool ParseLocalIpv6Addresses(std::istream &input, uint32_t expectedIndex, const std::string &ifaceName,
+                             std::vector<std::array<uint8_t, 16>> &addresses)
+{
+    addresses.clear();
+    std::string line;
+    while (std::getline(input, line)) {
+        std::istringstream row(line);
+        std::string hex, iface, extra;
+        unsigned index, prefix, scope, flags;
+        if (!(row >> hex >> std::hex >> index >> prefix >> scope >> flags >> iface) || (row >> extra)) {
+            addresses.clear();
+            return false;
+        }
+        if (iface != ifaceName || index != expectedIndex || (flags & (0x40 | 0x08 | 0x04)) || hex.size() != 32 ||
+            !std::all_of(hex.begin(), hex.end(), [](unsigned char c) { return std::isxdigit(c); })) {
+            continue;
+        }
+        std::array<uint8_t, 16> address{};
+        for (size_t i = 0; i < address.size(); ++i) {
+            auto digit = [](unsigned char c) { return c <= '9' ? c - '0' : std::tolower(c) - 'a' + 10; };
+            address[i] = static_cast<uint8_t>((digit(hex[i * 2]) << 4) | digit(hex[i * 2 + 1]));
+        }
+        if (addresses.size() >= 64) {
+            addresses.clear();
+            return false;
+        }
+        addresses.push_back(address);
+    }
+    return input.eof() && !input.bad();
+}
+
+bool NearlinkIpShareTun::ReadLocalIpv6Addresses(uint32_t &index,
+                                               std::vector<std::array<uint8_t, 16>> &addresses,
+                                               const std::string &ifaceName)
+{
+    addresses.clear();
+    int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return false;
+    }
+    ifreq request{};
+    strncpy(request.ifr_name, ifaceName.c_str(), IFNAMSIZ - 1);
+    bool valid = ioctl(fd, SIOCGIFINDEX, &request) == 0 && request.ifr_ifindex > 0;
+    close(fd);
+    if (!valid) {
+        return false;
+    }
+    index = static_cast<uint32_t>(request.ifr_ifindex);
+    std::ifstream input("/proc/net/if_inet6");
+    return input.is_open() && ParseLocalIpv6Addresses(input, index, ifaceName, addresses);
 }
 
 bool NearlinkIpShareTun::IsIpv6AddressUsable(const uint8_t address[16], const std::string &ifaceName)

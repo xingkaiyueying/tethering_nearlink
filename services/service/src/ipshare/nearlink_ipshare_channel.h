@@ -74,7 +74,9 @@ private:
     void CancelPassive(const SLE_Addr_S *addr, uint16_t port);
     bool OwnsChannel(uint16_t lcid, uint8_t tcid);
     int Receive(DTAP_Data_Info_S *info, SDF_Buff_S *buffer);
-    int32_t Send(const uint8_t *data, uint16_t length, bool relayed = false, uint64_t expectedGeneration = 0);
+    enum class SendContext { TUN, CP_RELAY };
+    int32_t Send(const uint8_t *data, uint16_t length, bool relayed = false, uint64_t expectedGeneration = 0,
+                 SendContext context = SendContext::TUN);
     void RecordPacketErrorLocked(bool received, const char *stage, int32_t code);
     struct PacketErrorState {
         uint64_t total{0};

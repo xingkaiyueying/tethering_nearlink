@@ -2,9 +2,6 @@
 #include "nearlink_ipshare_link.h"
 
 #include <algorithm>
-#include <arpa/inet.h>
-#include <cerrno>
-#include <cstring>
 #include <iterator>
 #include "iposl_profile.h"
 #include "log.h"
@@ -50,6 +47,10 @@ int32_t NearlinkIpShareLink::Open(uint64_t generation)
     {
         std::lock_guard lock(mutex_);
         generation_ = generation;
+        localIpv6_.clear();
+        localIfindex_ = 0;
+        localCacheUntil_ = {};
+        ++localRefreshTicket_;
     }
     std::weak_ptr<NearlinkIpShareLink> weak = shared_from_this();
     int32_t ret = tun_.Open([weak](const uint8_t *data, uint16_t length) {
@@ -80,8 +81,59 @@ void NearlinkIpShareLink::Close()
         members_.clear();
         owners_.clear();
         transactions_.clear();
+        localIpv6_.clear();
+        localCacheUntil_ = {};
+        ++localRefreshTicket_;
     }
     tun_.Close(); // Join the reader after releasing the dispatch lock.
+}
+
+void NearlinkIpShareLink::RefreshLocalAddresses(uint64_t generation)
+{
+    uint64_t ticket;
+    {
+        std::lock_guard lock(mutex_);
+        if (!generation_ || generation != generation_) {
+            return;
+        }
+        ticket = ++localRefreshTicket_;
+    }
+    // Ext's address-change wake-up and one-second maintenance both query GetStatus.
+    // Read the kernel snapshot on that control path, outside the packet/dispatch lock.
+    uint32_t index = 0;
+    std::vector<std::array<uint8_t, 16>> addresses;
+    bool ready = NearlinkIpShareTun::ReadLocalIpv6Addresses(index, addresses, "sleip0");
+    std::set<std::array<uint8_t, 16>> next(addresses.begin(), addresses.end());
+    std::lock_guard lock(mutex_);
+    if (!generation_ || generation != generation_ || ticket != localRefreshTicket_) {
+        return;
+    }
+    ready = ready && index && (!localIfindex_ || index == localIfindex_);
+    if (ready && !localIfindex_) {
+        localIfindex_ = index;
+    }
+    if (!ready) {
+        next.clear();
+    }
+    if (next != localIpv6_) {
+        HILOGI("[IpShare][LocalAddresses] generation=%{public}llu ifindex=%{public}u ready=%{public}d count=%{public}zu",
+               static_cast<unsigned long long>(generation_), index, ready, next.size());
+    }
+    localIpv6_.swap(next);
+    // Allow several maintenance intervals, but bound stale evidence if control-plane refresh stops.
+    localCacheUntil_ = ready ? std::chrono::steady_clock::now() + std::chrono::seconds(5) :
+                              std::chrono::steady_clock::time_point{};
+}
+
+bool NearlinkIpShareLink::IsLocalIpv6Locked(const uint8_t address[16],
+                                           std::chrono::steady_clock::time_point now) const
+{
+    if (now >= localCacheUntil_) {
+        return false;
+    }
+    std::array<uint8_t, 16> key{};
+    std::copy(address, address + key.size(), key.begin());
+    return localIpv6_.count(key) != 0;
 }
 
 bool NearlinkIpShareLink::Add(const std::shared_ptr<NearlinkIpShareChannel> &channel, uint64_t epoch)
@@ -207,36 +259,38 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
         return -1;
     }
     std::array<uint8_t, 10> transactionKey{};
-    std::copy(transaction.key, transaction.key + 6, transactionKey.begin());
-    for (unsigned i = 0; i < 4; ++i) {
-        transactionKey[6 + i] = transaction.xid >> (24 - i * 8);
+    if (dhcp) {
+        std::copy(transaction.key, transaction.key + 6, transactionKey.begin());
+        for (unsigned i = 0; i < 4; ++i) {
+            transactionKey[6 + i] = transaction.xid >> (24 - i * 8);
+        }
     }
-    std::vector<Member> targets;
+    std::array<Member, 32> targets{};
+    size_t targetCount = 0;
     bool local = false;
     {
         std::lock_guard lock(mutex_);
         auto now = std::chrono::steady_clock::now();
-        for (auto it = transactions_.begin(); it != transactions_.end();) {
-            it = it->second.until <= now ? transactions_.erase(it) : std::next(it);
+        if (dhcp) {
+            for (auto it = transactions_.begin(); it != transactions_.end();) {
+                it = it->second.until <= now ? transactions_.erase(it) : std::next(it);
+            }
         }
-        auto pending = transactions_.find(transactionKey);
+        auto pending = dhcp ? transactions_.find(transactionKey) : transactions_.end();
         if (source && dhcp && pending != transactions_.end() && pending->second.epoch != epoch) {
             ++dropped_;
             ReportLocked("dhcp-retired-epoch", epoch, pi);
             return -1;
         }
         auto member = members_.find(epoch);
-        TraceDnsLocked(source ? "MEMBER_RX" : "TUN_OUT", data, length, epoch);
         if (!generation_ || (source && (member == members_.end() || member->second.lock().get() != source ||
             !SourceAllowed(*source, data, length) || !source->AuthorizePacket(data, length, epoch, true)))) {
             ++dropped_;
-            TraceDnsLocked("SOURCE_REJECT", data, length, epoch, 0, -1);
             ReportLocked("source", epoch, pi);
             return -1;
         }
-        auto sourceOwner = owners_.find(std::string(reinterpret_cast<const char *>(data + (ipv6 ? 8 : 12)),
-                                                   ipv6 ? 16 : 4));
-        if (source && (dhcp || NdOffset(data, length) || sourceOwner == owners_.end())) {
+        if (source && (dhcp || nd || owners_.find(std::string(
+            reinterpret_cast<const char *>(data + (ipv6 ? 8 : 12)), ipv6 ? 16 : 4)) == owners_.end())) {
             RefreshOwnersLocked(*source, epoch);
         }
         if (source && dhcp) {
@@ -266,79 +320,78 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
         auto owner = owners_.find(std::string(reinterpret_cast<const char *>(destination), ipv6 ? 16 : 4));
         bool group = ipv6 ? destination[0] == 0xff : V4(destination) == 0xffffffff ||
                          (destination[0] >= 224 && destination[0] <= 239);
-        bool onLink = ipv6 && (destination[0] == 0xfe && (destination[1] & 0xc0) == 0x80);
-        if (source) {
+        // IPv4 directed broadcast depends on the authenticated source subnet.
+        if (source && !ipv6) {
+            std::lock_guard channelLock(source->mutex_);
+            group = group || (source->subnetMask_ &&
+                V4(destination) == (source->boundIp_ | ~source->subnetMask_));
+        }
+        bool routerSolicitation = source && nd && data[nd] == 133;
+        if (!dhcp && !group && owner != owners_.end()) {
+            // Established unicast resolves exactly one member; authorization still checks its current lease/epoch.
+            auto member = members_.find(owner->second);
+            auto target = member == members_.end() ? nullptr : member->second.lock();
+            if (target && target.get() != source && !routerSolicitation &&
+                target->OwnsAddress(destination, ipv6, nd != 0)) {
+                targets[targetCount++] = {target, owner->second};
+            }
+        } else if (!routerSolicitation && !(source && dhcp) &&
+                   (dhcp || group || nd || (!source && !ipv6))) {
+            for (const auto &[targetEpoch, weak] : members_) {
+                auto target = weak.lock();
+                if (!target || target.get() == source) {
+                    continue;
+                }
+                // Group/control fanout retains each member's family/subnet checks.
+                {
+                    std::lock_guard channelLock(target->mutex_);
+                    if (ipv6 && target->mode_ != 3) {
+                        continue;
+                    }
+                    if (!source && !ipv6 && target->DhcpBoundLocked() && target->subnetMask_) {
+                        group = group || V4(destination) == (target->boundIp_ | ~target->subnetMask_);
+                    }
+                }
+                bool selected = dhcp ? pending != transactions_.end() && pending->second.epoch == targetEpoch &&
+                                       target->MatchesDhcpReply(transaction) :
+                                group || (nd && target->OwnsAddress(destination, ipv6, true));
+                if (selected) {
+                    targets[targetCount++] = {target, targetEpoch};
+                }
+            }
+        }
+        local = source && (dhcp || routerSolicitation || group);
+        if (source && targetCount == 0 && !local) {
             std::lock_guard channelLock(source->mutex_);
             if (ipv6) {
                 auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-                onLink = source->ipv6_.OnLink(destination, seconds);
-            } else if (source->subnetMask_) {
-                onLink = (V4(destination) & source->subnetMask_) == (source->boundIp_ & source->subnetMask_);
-                group = group || V4(destination) == (source->boundIp_ | ~source->subnetMask_);
+                local = !source->ipv6_.OnLink(destination, seconds) || IsLocalIpv6Locked(destination, now);
+            } else {
+                bool onLink = source->subnetMask_ &&
+                    (V4(destination) & source->subnetMask_) == (source->boundIp_ & source->subnetMask_);
+                local = !onLink || V4(destination) == source->serverIp_;
             }
-        }
-        bool routerSolicitation = source && nd && data[nd] == 133;
-        for (const auto &[targetEpoch, weak] : members_) {
-            if (!dhcp && !group && owner != owners_.end() && owner->second != targetEpoch) {
-                continue;
-            }
-            auto target = weak.lock();
-            if (!target) {
-                continue;
-            }
-            // Prefix/subnet evidence comes from this member's authenticated configuration.
-            {
-                std::lock_guard channelLock(target->mutex_);
-                if (ipv6 && target->mode_ != 3) {
-                    continue;
-                }
-                if (!source && !ipv6 && target->DhcpBoundLocked() && target->subnetMask_) {
-                    group = group || V4(destination) == (target->boundIp_ | ~target->subnetMask_);
-                }
-            }
-            if (target.get() == source || routerSolicitation || (source && dhcp)) {
-                continue;
-            }
-            bool selected = dhcp ? pending != transactions_.end() && pending->second.epoch == targetEpoch &&
-                                   target->MatchesDhcpReply(transaction) :
-                            group || ((nd || (owner != owners_.end() && owner->second == targetEpoch)) &&
-                                      target->OwnsAddress(destination, ipv6, nd != 0));
-            if (selected) {
-                targets.push_back({target, targetEpoch});
-            }
-        }
-        local = source && (dhcp || routerSolicitation || group || (targets.empty() && !onLink));
-        // Gateway addresses and ND also belong to the local kernel. Unknown link-local
-        // unicast is injected once so the kernel can answer its own NS/NA and ICMP.
-        if (source && targets.empty() && ipv6 && onLink &&
-            NearlinkIpShareTun::IsIpv6AddressUsable(destination, "sleip0")) {
-            local = true;
-        }
-        if (source && !ipv6 && targets.empty()) {
-            std::lock_guard channelLock(source->mutex_);
-            local = local || V4(destination) == source->serverIp_;
         }
         if (local) {
             if (!source->IsCurrentGeneration(epoch) || tun_.Write(data, length) != 0) {
                 ++dropped_;
-                TraceDnsLocked("TUN_IN_ERROR", data, length, epoch, 0, -1);
                 ReportLocked("tun-write");
                 return -1;
             }
             ++local_;
-            TraceDnsLocked("TUN_IN", data, length, epoch);
         }
-        if (targets.empty() && !local) {
+        if (targetCount == 0 && !local) {
             ++dropped_;
-            TraceDnsLocked("NO_TARGET", data, length, epoch, 0, -1);
             ReportLocked("unknown-destination", epoch, pi);
         }
     }
-    // Synchronous fanout is bounded by 32 seats. Each exit checks its epoch again.
-    for (const auto &target : targets) {
-        int32_t ret = target.channel->Send(data, length, source != nullptr, target.epoch);
+    // Receive runs on CP: submit relays there directly. TUN traffic retains the bounded CP handoff.
+    for (size_t i = 0; i < targetCount; ++i) {
+        const auto &target = targets[i];
+        auto context = source ? NearlinkIpShareChannel::SendContext::CP_RELAY :
+                                NearlinkIpShareChannel::SendContext::TUN;
+        int32_t ret = target.channel->Send(data, length, source != nullptr, target.epoch, context);
         std::lock_guard lock(mutex_);
-        TraceDnsLocked("MEMBER_TX", data, length, epoch, target.epoch, ret);
         if (dhcp || nd) {
             RefreshOwnersLocked(*target.channel, target.epoch);
         }
@@ -350,46 +403,6 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
         ReportLocked(ret == 0 ? "deliver" : "egress", target.epoch, pi);
     }
     return 0;
-}
-
-void NearlinkIpShareLink::TraceDnsLocked(const char *stage, const uint8_t *data, uint16_t length,
-                                       uint64_t sourceEpoch, uint64_t targetEpoch, int32_t code)
-{
-    // The dispatch caller has validated the complete IP packet. Inspect only bounded UDP DNS headers.
-    bool ipv6 = data[0] >> 4 == 6;
-    size_t offset = ipv6 ? 40 : (data[0] & 0x0f) * 4;
-    if ((ipv6 ? data[6] != 17 : data[9] != 17 || (data[6] & 0x3f) || data[7]) ||
-        offset + 20 > length) {
-        return;
-    }
-    unsigned sourcePort = (unsigned(data[offset]) << 8) | data[offset + 1];
-    unsigned destinationPort = (unsigned(data[offset + 2]) << 8) | data[offset + 3];
-    if (sourcePort != 53 && destinationPort != 53) {
-        return;
-    }
-    const int savedError = errno;
-    const auto now = std::chrono::steady_clock::now();
-    if (now - traceWindow_ >= std::chrono::seconds(1)) {
-        traceWindow_ = now;
-        traceCount_ = 0;
-    }
-    if (++traceCount_ > 128) {
-        ++traceSuppressed_;
-        errno = savedError;
-        return;
-    }
-    char source[INET6_ADDRSTRLEN]{}, destination[INET6_ADDRSTRLEN]{};
-    (void)inet_ntop(ipv6 ? AF_INET6 : AF_INET, data + (ipv6 ? 8 : 12), source, sizeof(source));
-    (void)inet_ntop(ipv6 ? AF_INET6 : AF_INET, data + (ipv6 ? 24 : 16), destination, sizeof(destination));
-    unsigned xid = (unsigned(data[offset + 8]) << 8) | data[offset + 9];
-    HILOGI("[IpShare][DnsLink] stage=%{public}s generation=%{public}llu from=%{public}llu to=%{public}llu "
-           "src=[%{public}s]:%{public}u dst=[%{public}s]:%{public}u xid=%{public}u "
-           "response=%{public}u rcode=%{public}u bytes=%{public}u code=%{public}d suppressed=%{public}llu",
-           stage, static_cast<unsigned long long>(generation_), static_cast<unsigned long long>(sourceEpoch),
-           static_cast<unsigned long long>(targetEpoch), source, sourcePort, destination, destinationPort, xid,
-           unsigned(data[offset + 10] >> 7), unsigned(data[offset + 11] & 0x0f), unsigned(length), code,
-           static_cast<unsigned long long>(traceSuppressed_));
-    errno = savedError;
 }
 
 void NearlinkIpShareLink::ReportLocked(const char *reason, uint64_t epoch, uint8_t family)

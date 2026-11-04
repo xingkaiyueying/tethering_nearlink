@@ -16,11 +16,13 @@
 #define NEARLINK_IPSHARE_TUN_H
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace OHOS::Nearlink {
 
@@ -36,6 +38,8 @@ public:
     int32_t Write(const uint8_t *data, uint16_t length);
     bool IsOpen() const;
     static bool IsIpv6AddressUsable(const uint8_t address[16], const std::string &ifaceName = "sleip0");
+    static bool ReadLocalIpv6Addresses(uint32_t &index, std::vector<std::array<uint8_t, 16>> &addresses,
+                                       const std::string &ifaceName = "sleip0");
     static bool ParseIpv6Evidence(const std::string &text, uint32_t index, uint8_t address[16],
                                   const std::string &ifaceName = "sleip0");
 

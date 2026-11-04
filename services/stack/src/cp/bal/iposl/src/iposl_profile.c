@@ -181,28 +181,39 @@ static void IposlSendRelease(void *arg)
     }
 }
 
+int32_t IposlProfileSendIpOnCp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *data, uint16_t length,
+                               uint64_t generation)
+{
+    if (!IposlCodecValidatePacket(pi, data, length)) {
+        return IPOSL_ERR_INVALID_PARAM;
+    }
+    const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
+    if (callbacks == NULL || callbacks->canSend == NULL || !callbacks->canSend(lcid, tcid, pi, generation)) {
+        return IPOSL_ERR_INVALID_STATE;
+    }
+    SDF_Buff_S *buff = SDF_BuffNewWithReserve(length);
+    if (buff == NULL) {
+        return IPOSL_ERR_INVALID_STATE;
+    }
+    uint8_t *payload = SDF_BuffAppend(buff, length);
+    if (payload == NULL) {
+        SDF_BuffFree(buff);
+        return IPOSL_ERR_INVALID_STATE;
+    }
+    (void)memcpy(payload, data, length);
+    DTAP_Data_S packet = {.pi = pi, .lcid = lcid, .tcid = tcid, .buff = buff};
+    int32_t result = (int32_t)DTAP_DataSend(&packet);
+    if (result != 0) {
+        SDF_BuffFree(buff);
+    }
+    return result;
+}
+
 static void IposlSendOnCp(void *arg)
 {
     IposlSendTask *task = arg;
-    const IposlProfileCallbacks *callbacks = IposlGetCallbacks();
-    if (callbacks == NULL || !callbacks->canSend(task->lcid, task->tcid, task->pi, task->generation)) {
-        return;
-    }
-    SDF_Buff_S *buff = SDF_BuffNewWithReserve(task->length);
-    if (buff == NULL) {
-        return;
-    }
-    uint8_t *payload = SDF_BuffAppend(buff, task->length);
-    if (payload == NULL) {
-        SDF_BuffFree(buff);
-        return;
-    }
-    (void)memcpy(payload, task->payload, task->length);
-    DTAP_Data_S packet = {.pi = task->pi, .lcid = task->lcid, .tcid = task->tcid, .buff = buff};
-    task->result = (int32_t)DTAP_DataSend(&packet);
-    if (task->result != 0) {
-        SDF_BuffFree(buff);
-    }
+    task->result = IposlProfileSendIpOnCp(task->lcid, task->tcid, task->pi, task->payload,
+                                       task->length, task->generation);
 }
 
 int32_t IposlProfileSendIpv4(uint16_t lcid, uint8_t tcid, const uint8_t *data, uint16_t length)
