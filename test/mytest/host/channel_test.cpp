@@ -15,7 +15,11 @@ static int creates, destroys, tunWrites, sent;
 static uint8_t sentPi;
 static bool secure = true;
 static uint32_t destroyResult;
-extern "C" uint32_t QOSM_TransChannelCreate(const QOSM_TransChannelParams_S *) { ++creates; return 0; }
+extern "C" uint32_t QOSM_TransChannelCreate(const QOSM_TransChannelParams_S *params) {
+    assert(params->slqi == QOSM_TRANS_CHANNEL_SLQI_HIGH);
+    assert(params->frameType == QOSM_SLE_RADIO_FRAME_TYPE_2);
+    ++creates; return 0;
+}
 extern "C" uint32_t QOSM_TransChannelDestroy(const QOSM_TransChannelReleaseParams_S *) { ++destroys; return destroyResult; }
 extern "C" int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *, uint16_t, uint64_t gen)
 {

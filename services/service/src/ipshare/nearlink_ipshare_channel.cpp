@@ -455,13 +455,14 @@ int32_t NearlinkIpShareChannel::Open(const uint8_t peer[6], uint8_t addressType)
         params.accessTransMode = ACCESS_TRANS_MODE_UNICAST;
         params.srcPort = IP_SHARE_PORT;
         params.dstPort = IP_SHARE_PORT;
-        params.slqi = QOSM_TRANS_CHANNEL_SLQI_LOW;
-        params.frameType = QOSM_SLE_RADIO_FRAME_TYPE_1;
+        params.slqi = QOSM_TRANS_CHANNEL_SLQI_HIGH;
+        params.frameType = QOSM_SLE_RADIO_FRAME_TYPE_2;
         params.tcConf.mode = TRANSPORT_MODE_BASIC;
         channelPending_ = true;
     }
-    HILOGI("[IpShare][Channel] QoSM create submitted port=%{public}u addressType=%{public}u", IP_SHARE_PORT,
-           addressType);
+    HILOGI("[IpShare][Channel] QoSM create submitted port=%{public}u addressType=%{public}u "
+           "slqi=%{public}u frameType=%{public}u", IP_SHARE_PORT, addressType,
+           static_cast<unsigned>(params.slqi), static_cast<unsigned>(params.frameType));
     int32_t ret = QOSM_TransChannelCreate(&params);
     if (ret != 0) {
         std::lock_guard<std::mutex> lock(mutex_);
