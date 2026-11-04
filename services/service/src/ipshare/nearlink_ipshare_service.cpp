@@ -834,8 +834,14 @@ void NearlinkIpShareService::RefreshPeerLinksLocked()
     for (size_t slot = 0; slot < gatewayPeers_.size(); ++slot) {
         const auto &entry = gatewayPeers_[slot];
         if (entry) {
-            status_.peerLinks.push_back({static_cast<uint32_t>(slot), entry->epoch, entry->selectedMode,
-                                         "sleip0", entry->releasing, entry->active});
+            NearlinkIpSharePeerLink link;
+            link.slot = static_cast<uint32_t>(slot);
+            link.generation = entry->epoch;
+            link.selectedMode = entry->selectedMode;
+            link.ifaceName = "sleip0";
+            link.releasing = entry->releasing;
+            link.active = entry->active;
+            status_.peerLinks.push_back(link);
         }
     }
     status_.ifaceName = "sleip0";
