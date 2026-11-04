@@ -2,6 +2,8 @@
 #include "nearlink_ipshare_link.h"
 
 #include <algorithm>
+#include <arpa/inet.h>
+#include <cerrno>
 #include <cstring>
 #include <iterator>
 #include "iposl_profile.h"
@@ -224,9 +226,11 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
             return -1;
         }
         auto member = members_.find(epoch);
+        TraceDnsLocked(source ? "MEMBER_RX" : "TUN_OUT", data, length, epoch);
         if (!generation_ || (source && (member == members_.end() || member->second.lock().get() != source ||
             !SourceAllowed(*source, data, length) || !source->AuthorizePacket(data, length, epoch, true)))) {
             ++dropped_;
+            TraceDnsLocked("SOURCE_REJECT", data, length, epoch, 0, -1);
             ReportLocked("source", epoch, pi);
             return -1;
         }
@@ -317,13 +321,16 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
         if (local) {
             if (!source->IsCurrentGeneration(epoch) || tun_.Write(data, length) != 0) {
                 ++dropped_;
+                TraceDnsLocked("TUN_IN_ERROR", data, length, epoch, 0, -1);
                 ReportLocked("tun-write");
                 return -1;
             }
             ++local_;
+            TraceDnsLocked("TUN_IN", data, length, epoch);
         }
         if (targets.empty() && !local) {
             ++dropped_;
+            TraceDnsLocked("NO_TARGET", data, length, epoch, 0, -1);
             ReportLocked("unknown-destination", epoch, pi);
         }
     }
@@ -331,6 +338,7 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
     for (const auto &target : targets) {
         int32_t ret = target.channel->Send(data, length, source != nullptr, target.epoch);
         std::lock_guard lock(mutex_);
+        TraceDnsLocked("MEMBER_TX", data, length, epoch, target.epoch, ret);
         if (dhcp || nd) {
             RefreshOwnersLocked(*target.channel, target.epoch);
         }
@@ -342,6 +350,46 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
         ReportLocked(ret == 0 ? "deliver" : "egress", target.epoch, pi);
     }
     return 0;
+}
+
+void NearlinkIpShareLink::TraceDnsLocked(const char *stage, const uint8_t *data, uint16_t length,
+                                       uint64_t sourceEpoch, uint64_t targetEpoch, int32_t code)
+{
+    // The dispatch caller has validated the complete IP packet. Inspect only bounded UDP DNS headers.
+    bool ipv6 = data[0] >> 4 == 6;
+    size_t offset = ipv6 ? 40 : (data[0] & 0x0f) * 4;
+    if ((ipv6 ? data[6] != 17 : data[9] != 17 || (data[6] & 0x3f) || data[7]) ||
+        offset + 20 > length) {
+        return;
+    }
+    unsigned sourcePort = (unsigned(data[offset]) << 8) | data[offset + 1];
+    unsigned destinationPort = (unsigned(data[offset + 2]) << 8) | data[offset + 3];
+    if (sourcePort != 53 && destinationPort != 53) {
+        return;
+    }
+    const int savedError = errno;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - traceWindow_ >= std::chrono::seconds(1)) {
+        traceWindow_ = now;
+        traceCount_ = 0;
+    }
+    if (++traceCount_ > 128) {
+        ++traceSuppressed_;
+        errno = savedError;
+        return;
+    }
+    char source[INET6_ADDRSTRLEN]{}, destination[INET6_ADDRSTRLEN]{};
+    (void)inet_ntop(ipv6 ? AF_INET6 : AF_INET, data + (ipv6 ? 8 : 12), source, sizeof(source));
+    (void)inet_ntop(ipv6 ? AF_INET6 : AF_INET, data + (ipv6 ? 24 : 16), destination, sizeof(destination));
+    unsigned xid = (unsigned(data[offset + 8]) << 8) | data[offset + 9];
+    HILOGI("[IpShare][DnsLink] stage=%{public}s generation=%{public}llu from=%{public}llu to=%{public}llu "
+           "src=[%{public}s]:%{public}u dst=[%{public}s]:%{public}u xid=%{public}u "
+           "response=%{public}u rcode=%{public}u bytes=%{public}u code=%{public}d suppressed=%{public}llu",
+           stage, static_cast<unsigned long long>(generation_), static_cast<unsigned long long>(sourceEpoch),
+           static_cast<unsigned long long>(targetEpoch), source, sourcePort, destination, destinationPort, xid,
+           unsigned(data[offset + 10] >> 7), unsigned(data[offset + 11] & 0x0f), unsigned(length), code,
+           static_cast<unsigned long long>(traceSuppressed_));
+    errno = savedError;
 }
 
 void NearlinkIpShareLink::ReportLocked(const char *reason, uint64_t epoch, uint8_t family)

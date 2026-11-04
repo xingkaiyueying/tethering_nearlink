@@ -33,6 +33,8 @@ private:
     bool SourceAllowed(NearlinkIpShareChannel &source, const uint8_t *data, uint16_t length);
     void RefreshOwnersLocked(NearlinkIpShareChannel &channel, uint64_t epoch);
     void ReportLocked(const char *reason, uint64_t epoch = 0, uint8_t family = 0);
+    void TraceDnsLocked(const char *stage, const uint8_t *data, uint16_t length,
+                         uint64_t sourceEpoch, uint64_t targetEpoch = 0, int32_t code = 0);
     std::mutex mutex_;
     NearlinkIpShareTun tun_;
     uint64_t generation_{0};
@@ -45,6 +47,8 @@ private:
     std::map<std::array<uint8_t, 10>, Transaction> transactions_;
     uint64_t local_{0}, forwarded_{0}, dropped_{0};
     std::chrono::steady_clock::time_point lastReport_{};
+    std::chrono::steady_clock::time_point traceWindow_{};
+    uint64_t traceCount_{0}, traceSuppressed_{0};
 };
 } // namespace OHOS::Nearlink
 #endif

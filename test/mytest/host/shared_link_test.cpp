@@ -1,5 +1,6 @@
 
 #include <cassert>
+#include <cerrno>
 #include <array>
 #include <cstring>
 #include <mutex>
@@ -55,6 +56,14 @@ static void Dhcp(NearlinkIpShareLink&link,NearlinkIpShareChannel&c,uint8_t host,
 }
 int main(){
     auto link=std::make_shared<NearlinkIpShareLink>();assert(link->Open(100)==0&&opens==1);
+    uint8_t dnsTrace[40]{};dnsTrace[0]=0x45;dnsTrace[9]=17;dnsTrace[23]=53;
+    errno=EAGAIN;link->TraceDnsLocked("TEST",dnsTrace,sizeof(dnsTrace),2);
+    assert(errno==EAGAIN&&link->traceCount_==1);
+    link->TraceDnsLocked("TEST",dnsTrace,sizeof(dnsTrace)-1,2);assert(link->traceCount_==1);
+    dnsTrace[23]=54;link->TraceDnsLocked("TEST",dnsTrace,sizeof(dnsTrace),2);assert(link->traceCount_==1);
+    dnsTrace[23]=53;
+    for(unsigned i=0;i<130;++i)link->TraceDnsLocked("TEST",dnsTrace,sizeof(dnsTrace),2);
+    assert(errno==EAGAIN&&link->traceSuppressed_>0);
     auto a=Member(link,2),b=Member(link,3),v4=Member(link,4,1);
     // Identical xid values remain isolated by authenticated client key.
     Dhcp(*link,*a,2,1);Dhcp(*link,*b,3,1);
