@@ -30,7 +30,6 @@ extern "C" bool IposlProfileServerIsDrained() { return serverDrained; }
 extern "C" int32_t IposlProfileReleaseServerPeerChecked(const uint8_t *,uint8_t) { return 0; }
 extern "C" int32_t IposlProfileStartServerAny(uint8_t,uint32_t capacity,uint64_t g)
 { profileCapacity=capacity; profileGeneration=g; ++starts; return 0; }
-extern "C" void IposlProfileReleaseServerPeer(const uint8_t *,uint8_t) {}
 extern "C" int32_t IposlProfileStartTerminal(const uint8_t *,uint8_t,const uint8_t *,uint8_t,uint64_t g)
 { profileGeneration=g; ++starts; return 0; }
 extern "C" int32_t IposlProfileProbePeer(const uint8_t *,uint8_t,uint8_t,uint64_t) { return 0; }
@@ -45,7 +44,7 @@ bool NearlinkIpShareTun::ReadLocalIpv6Addresses(uint32_t &index,
     std::vector<std::array<uint8_t,16>> &addresses,const std::string &)
 { index=7;addresses.clear();return true; }
 NearlinkIpShareTun::~NearlinkIpShareTun() {}
-int32_t NearlinkIpShareTun::Open(const PacketCallback &, const std::string &) { fd_=1; return 0; }
+int32_t NearlinkIpShareTun::Open(const PacketCallback &) { fd_=1; return 0; }
 void NearlinkIpShareTun::Close() { fd_=-1; }
 int32_t NearlinkIpShareTun::Write(const uint8_t *,uint16_t) { ++writes; return 0; }
 bool NearlinkIpShareTun::IsOpen() const { return fd_>=0; }

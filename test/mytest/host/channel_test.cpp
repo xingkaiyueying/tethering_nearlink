@@ -35,7 +35,7 @@ bool NearlinkIpShareTun::ReadLocalIpv6Addresses(uint32_t &index,
     std::vector<std::array<uint8_t,16>> &addresses,const std::string &)
 { index=7;addresses.clear();return true; }
 NearlinkIpShareTun::~NearlinkIpShareTun() {}
-int32_t NearlinkIpShareTun::Open(const PacketCallback &, const std::string &) { fd_ = 1; return 0; }
+int32_t NearlinkIpShareTun::Open(const PacketCallback &) { fd_ = 1; return 0; }
 void NearlinkIpShareTun::Close() { fd_ = -1; }
 int32_t NearlinkIpShareTun::Write(const uint8_t *, uint16_t) { ++tunWrites; return fd_ >= 0 ? 0 : -1; }
 bool NearlinkIpShareTun::IsOpen() const { return fd_ >= 0; }
@@ -93,7 +93,7 @@ int main()
 
     // The S1 fixed endpoints require the same DAD/first-source authorization as every S2 address.
     uint8_t peerLla[16], localLla[16];
-    IposlCodecS1LinkLocal(peer, peerLla); IposlCodecS1LinkLocal(local, localLla);
+    TestLinkLocal(peer, peerLla); TestLinkLocal(local, localLla);
     Address peerAddr{}, localAddr{};
     std::copy(peerLla, peerLla + 16, peerAddr.begin());
     std::copy(localLla, localLla + 16, localAddr.begin());

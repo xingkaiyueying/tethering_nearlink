@@ -41,7 +41,7 @@ public:
 
     int32_t Initialize(const StateCallback &callback);
     void Deinitialize();
-    int32_t CreateTun(const std::string &ifaceName = "sleip0");
+    int32_t CreateTun();
     void AttachLink(const std::shared_ptr<NearlinkIpShareLink> &link);
     void ExportAddresses(NearlinkIpSharePeerLink &status);
     int32_t Open(const uint8_t peer[6], uint8_t addressType);

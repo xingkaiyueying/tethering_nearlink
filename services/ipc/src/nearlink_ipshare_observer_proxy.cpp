@@ -44,8 +44,6 @@ void NearlinkIpShareObserverProxy::OnStatusChanged(const NearlinkIpShareStatus &
         HILOGE("[IpShare][Observer] status notification send failed ret=%{public}d", ret);
         return;
     }
-    HILOGI("[IpShare][Observer] status notification sent role=%{public}d state=%{public}d error=%{public}d",
-           static_cast<int32_t>(status.role), static_cast<int32_t>(status.state), status.errorCode);
 }
 
 } // namespace OHOS::Nearlink

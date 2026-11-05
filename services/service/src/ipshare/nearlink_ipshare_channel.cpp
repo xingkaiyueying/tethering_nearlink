@@ -306,17 +306,16 @@ int NearlinkIpShareChannel::OnIpv6Received(DTAP_Data_Info_S *info, SDF_Buff_S *b
     return OnIpv4Received(info, buffer);
 }
 
-int32_t NearlinkIpShareChannel::CreateTun(const std::string &ifaceName)
+int32_t NearlinkIpShareChannel::CreateTun()
 {
-    ifaceName_ = ifaceName;
+    ifaceName_ = "sleip0";
     HILOGI("[IpShare][Channel] create TUN requested");
     int32_t ret = tun_.Open(
         [this](const uint8_t *data, uint16_t length) {
             if (Send(data, length) != 0) {
                 ++rejected_;
             }
-        },
-        ifaceName);
+        });
     if (ret != 0) {
         HILOGE("[IpShare][Channel] create TUN failed ret=%{public}d", ret);
         return ret;

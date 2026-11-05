@@ -40,8 +40,8 @@ bool NearlinkIpShareService::CanSend(uint16_t l,uint8_t t,uint8_t pi,uint64_t g)
     return false;
 }
 NearlinkIpShareTun::~NearlinkIpShareTun() {}
-int32_t NearlinkIpShareTun::Open(const PacketCallback&callback,const std::string&name) {
-    assert(name=="sleip0");fd_=1;callback_=callback;++opens;return 0;
+int32_t NearlinkIpShareTun::Open(const PacketCallback&callback) {
+    fd_=1;callback_=callback;++opens;return 0;
 }
 void NearlinkIpShareTun::Close(){fd_=-1;}
 int32_t NearlinkIpShareTun::Write(const uint8_t*,uint16_t){++writes;return fd_>=0?0:-1;}
@@ -73,6 +73,45 @@ static void Dhcp(NearlinkIpShareLink&link,NearlinkIpShareChannel&c,uint8_t host,
     if(message==1||message==3)assert(ReceiveOnCp(link,c,packet,300,c.generation_)==0);
     else link.FromTun(packet,300);
 }
+
+static void AddressReuseRegression()
+{
+    auto link=std::make_shared<NearlinkIpShareLink>();assert(link->Open(200)==0);
+    auto a=Member(link,10),b=Member(link,11),c=Member(link,12);
+    Dhcp(*link,*a,2,1);Dhcp(*link,*a,2,2);Dhcp(*link,*a,2,3);Dhcp(*link,*a,2,5);
+    a->leaseExpiry_=std::chrono::steady_clock::now()-std::chrono::seconds(1);
+    Dhcp(*link,*b,2,1);Dhcp(*link,*b,2,2);Dhcp(*link,*b,2,3);Dhcp(*link,*b,2,5);
+    uint8_t address[]={192,168,77,2};
+    assert(!a->OwnsAddress(address,false)&&b->OwnsAddress(address,false));
+    assert(link->owners_.at(std::string(reinterpret_cast<const char*>(address),4))==11);
+    uint8_t data[1500];ProbeData(data,1,true,gatewayId,b->peer_,0);
+    delivered.clear();link->FromTun(data,1500);assert(delivered.size()==1&&delivered[0].lcid==11);
+    ProbeData(data,1,false,a->peer_,gatewayId,0);
+    assert(ReceiveOnCp(*link,*a,data,1500,10)!=0);
+    Dhcp(*link,*c,3,1);Dhcp(*link,*c,3,2);Dhcp(*link,*c,3,3);Dhcp(*link,*c,3,5);
+    ProbeData(data,1,false,c->peer_,gatewayId,0);data[15]=3;data[19]=2;
+    delivered.clear();assert(ReceiveOnCp(*link,*c,data,1500,12)==0&&delivered.size()==1&&delivered[0].lcid==11);
+    // A live lease keeps its owner when another member attempts to claim the address.
+    link->UpdateOwnerLocked(std::string(reinterpret_cast<const char*>(address),4),12);
+    assert(link->owners_.at(std::string(reinterpret_cast<const char*>(address),4))==11);
+    auto ra=Ra();link->FromTun(ra.data(),ra.size());
+    auto dad=Dad(Global(10));assert(ReceiveOnCp(*link,*a,dad.data(),dad.size(),10)==0);
+    auto first=Echo(Global(10),Global(1));assert(ReceiveOnCp(*link,*a,first.data(),first.size(),10)==0);
+    a->ipv6_.Expire(UINT64_MAX);
+    b->ipv6_.Reset();
+    auto now=std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    assert(b->ipv6_.Authorize(ra.data(),ra.size(),false,gatewayId,now));
+    assert(ReceiveOnCp(*link,*b,dad.data(),dad.size(),11)==0);
+    assert(ReceiveOnCp(*link,*b,first.data(),first.size(),11)==0);
+    auto ip=Global(10);assert(link->owners_.at(std::string(reinterpret_cast<const char*>(ip.data()),16))==11);
+    auto reply=Echo(Global(1),Global(10));delivered.clear();link->FromTun(reply.data(),reply.size());
+    assert(delivered.size()==1&&delivered[0].lcid==11);
+    assert(ReceiveOnCp(*link,*a,first.data(),first.size(),10)!=0);
+    link->Close();a->Close();b->Close();c->Close();
+    puts("R01 IPv4 lease reuse, IPv6 address expiry/reuse, member/local delivery and live-owner conflict PASS");
+}
+
 int main(){
     auto link=std::make_shared<NearlinkIpShareLink>();assert(link->Open(100)==0&&opens==1);
     link->RefreshLocalAddresses(100);assert(snapshots==1&&link->localIpv6_.size()==2);
@@ -167,5 +206,6 @@ int main(){
     snapshotHook=[&](){link->Close();};link->RefreshLocalAddresses(100);
     assert(!link->tun_.IsOpen()&&link->localIpv6_.empty());
     assert(ReceiveOnCp(*link,*again,da.data(),da.size(),5)!=0);
+    AddressReuseRegression();
     std::cout<<"shared_link=PASS (CP relay context, cached local delivery/withdrawal/expiry/races, DHCP-only cleanup, DHCP xid collisions, source spoofing, unicast/broadcast, mixed modes, IPv6 relay/DAD, epoch revocation, final member retention)\n";
 }

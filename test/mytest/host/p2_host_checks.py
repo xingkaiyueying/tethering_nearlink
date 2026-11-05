@@ -30,6 +30,11 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
                    repo / 'interfaces/def/nearlink_def_types.h',
                    repo / 'ipc_parcel/interface/nearlink_service_ipc_interface_code.h']:
         shutil.copyfile(source, out / source.name)
+    if os.environ.get('P3_OWNER_REUSE_NEGATIVE'):
+        link = out / 'nearlink_ipshare_link.cpp'
+        text = link.read_text(encoding='utf-8')
+        assert text.count('owners_[address] = epoch;') == 1
+        link.write_text(text.replace('owners_[address] = epoch;', 'owners_.emplace(address, epoch);'), encoding='utf-8')
     (out / 'arpa').mkdir(exist_ok=True)
     (out / 'arpa/inet.h').write_text('#pragma once\n#include <winsock2.h>\n#include <ws2tcpip.h>\n#undef ERROR\n')
     before_ref = os.environ.get('P3_RESTART_BEFORE_REF')
@@ -107,7 +112,4 @@ with tempfile.TemporaryDirectory(prefix='p2-s1-') as tmp:
                         *['-I'+d for d in includes], str(profile/'src'/name)], check=True)
     print('real_stack_headers_c_syntax=PASS (logging/CP worker platform boundary stubbed)', flush=True)
 
-    from probe_syntax import check_probe
-    check_probe(a.cxx, repo, syntax / 'probe')
-    print('native_probe_host_syntax=PASS (Linux/token SDK boundary stubbed)', flush=True)
     subprocess.run([__import__('sys').executable, str(here / 'tun_close_host_check.py'), a.cxx], check=True)

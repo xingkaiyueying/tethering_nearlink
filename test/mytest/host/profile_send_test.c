@@ -6,7 +6,6 @@
 #include <assert.h>
 #include "iposl_profile.h"
 #include "iposl_codec.c"
-static atomic_uint_fast64_t g_sendGeneration=42;
 static uint64_t allowedGeneration=42;
 static bool SecureSend(uint16_t l,uint8_t t,uint8_t pi,uint64_t g) { return l==1 && t==2 && (pi==1 || pi==2) && g==allowedGeneration; }
 static const IposlProfileCallbacks *IposlGetCallbacks(void) { static IposlProfileCallbacks cb={.canSend=SecureSend}; return &cb; }

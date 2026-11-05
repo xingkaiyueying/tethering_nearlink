@@ -1,4 +1,17 @@
-/* Copyright (c) 2026 Huawei Device Co., Ltd. Licensed under the Apache License, Version 2.0. */
+/*
+ * Copyright (C) 2026 Huawei Device Co., Ltd.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 #ifndef NEARLINK_IPSHARE_LINK_H
 #define NEARLINK_IPSHARE_LINK_H
 
@@ -34,6 +47,7 @@ private:
     int32_t Dispatch(NearlinkIpShareChannel *source, const uint8_t *data, uint16_t length, uint64_t epoch);
     bool SourceAllowed(NearlinkIpShareChannel &source, const uint8_t *data, uint16_t length);
     void RefreshOwnersLocked(NearlinkIpShareChannel &channel, uint64_t epoch);
+    void UpdateOwnerLocked(const std::string &address, uint64_t epoch);
     bool IsLocalIpv6Locked(const uint8_t address[16], std::chrono::steady_clock::time_point now) const;
     void ReportLocked(const char *reason, uint64_t epoch = 0, uint8_t family = 0);
     std::mutex mutex_;
@@ -50,7 +64,9 @@ private:
         std::chrono::steady_clock::time_point until;
     };
     std::map<std::array<uint8_t, 10>, Transaction> transactions_;
-    uint64_t local_{0}, forwarded_{0}, dropped_{0};
+    uint64_t local_{0};
+    uint64_t forwarded_{0};
+    uint64_t dropped_{0};
     std::chrono::steady_clock::time_point lastReport_{};
 };
 } // namespace OHOS::Nearlink

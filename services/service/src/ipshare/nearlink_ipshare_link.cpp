@@ -1,4 +1,17 @@
-/* Copyright (c) 2026 Huawei Device Co., Ltd. Licensed under the Apache License, Version 2.0. */
+/*
+ * Copyright (C) 2026 Huawei Device Co., Ltd.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 #include "nearlink_ipshare_link.h"
 
 #include <algorithm>
@@ -9,13 +22,13 @@
 
 namespace OHOS::Nearlink {
 namespace {
-uint32_t V4(const uint8_t *address)
+uint32_t ReadIpv4Address(const uint8_t *address)
 {
-    return (uint32_t(address[0]) << 24) | (uint32_t(address[1]) << 16) |
-           (uint32_t(address[2]) << 8) | address[3];
+    return (static_cast<uint32_t>(address[0]) << 24) | (static_cast<uint32_t>(address[1]) << 16) |
+           (static_cast<uint32_t>(address[2]) << 8) | address[3];
 }
 
-size_t NdOffset(const uint8_t *data, size_t length)
+size_t GetNeighborDiscoveryOffset(const uint8_t *data, size_t length)
 {
     if (length < 40 || data[0] >> 4 != 6) {
         return 0;
@@ -57,7 +70,7 @@ int32_t NearlinkIpShareLink::Open(uint64_t generation)
         if (auto link = weak.lock()) {
             link->FromTun(data, length);
         }
-    }, "sleip0");
+    });
     HILOGI("[IpShare][SharedLink] open generation=%{public}llu iface=sleip0 code=%{public}d",
            static_cast<unsigned long long>(generation), ret);
     return ret;
@@ -176,23 +189,46 @@ void NearlinkIpShareLink::RefreshOwnersLocked(NearlinkIpShareChannel &channel, u
     for (auto it = owners_.begin(); it != owners_.end();) {
         it = it->second == epoch ? owners_.erase(it) : std::next(it);
     }
-    std::lock_guard channelLock(channel.mutex_);
-    if (!channel.active_ || !channel.enabled_ || channel.generation_ != epoch || !members_.count(epoch)) {
-        return;
-    }
-    if (channel.DhcpBoundLocked()) {
-        const uint8_t address[] = {uint8_t(channel.boundIp_ >> 24), uint8_t(channel.boundIp_ >> 16),
-                                   uint8_t(channel.boundIp_ >> 8), uint8_t(channel.boundIp_)};
-        owners_.emplace(std::string(reinterpret_cast<const char *>(address), sizeof(address)), epoch);
-    }
-    auto now = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    channel.ipv6_.Expire(now);
-    for (const auto &mapping : channel.ipv6_.Mappings()) {
-        if (mapping.terminal && mapping.confirmed && !mapping.conflict) {
-            owners_.emplace(std::string(reinterpret_cast<const char *>(mapping.address.data()), 16), epoch);
+    std::vector<std::string> addresses;
+    {
+        std::lock_guard channelLock(channel.mutex_);
+        if (!channel.active_ || !channel.enabled_ || channel.generation_ != epoch || !members_.count(epoch)) {
+            return;
+        }
+        if (channel.DhcpBoundLocked()) {
+            const uint8_t address[] = {static_cast<uint8_t>(channel.boundIp_ >> 24),
+                                      static_cast<uint8_t>(channel.boundIp_ >> 16),
+                                      static_cast<uint8_t>(channel.boundIp_ >> 8),
+                                      static_cast<uint8_t>(channel.boundIp_)};
+            addresses.emplace_back(reinterpret_cast<const char *>(address), sizeof(address));
+        }
+        auto now = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        channel.ipv6_.Expire(now);
+        for (const auto &mapping : channel.ipv6_.Mappings()) {
+            if (mapping.terminal && mapping.confirmed && !mapping.conflict) {
+                addresses.emplace_back(reinterpret_cast<const char *>(mapping.address.data()), 16);
+            }
         }
     }
+    // Inspect other channels after releasing this channel's lock.
+    for (const auto &address : addresses) {
+        UpdateOwnerLocked(address, epoch);
+    }
+}
+
+void NearlinkIpShareLink::UpdateOwnerLocked(const std::string &address, uint64_t epoch)
+{
+    auto owner = owners_.find(address);
+    if (owner != owners_.end() && owner->second != epoch) {
+        auto member = members_.find(owner->second);
+        auto channel = member == members_.end() ? nullptr : member->second.lock();
+        if (channel && channel->IsCurrentGeneration(owner->second) &&
+            channel->OwnsAddress(reinterpret_cast<const uint8_t *>(address.data()), address.size() == 16)) {
+            return;
+        }
+    }
+    owners_[address] = epoch;
 }
 
 bool NearlinkIpShareLink::SourceAllowed(NearlinkIpShareChannel &source, const uint8_t *data, uint16_t length)
@@ -200,7 +236,7 @@ bool NearlinkIpShareLink::SourceAllowed(NearlinkIpShareChannel &source, const ui
     if (data[0] >> 4 != 6 || std::all_of(data + 8, data + 24, [](uint8_t value) { return value == 0; })) {
         return true;
     }
-    size_t nd = NdOffset(data, length);
+    size_t nd = GetNeighborDiscoveryOffset(data, length);
     // Only control claims need a kernel lookup. Established data uses the
     // address evidence cache maintained by the channel.
     if (nd && NearlinkIpShareTun::IsIpv6AddressUsable(data + 8, "sleip0")) {
@@ -252,7 +288,7 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
         return -1;
     }
     const bool ipv6 = pi == 2;
-    const size_t nd = NdOffset(data, length);
+    const size_t nd = GetNeighborDiscoveryOffset(data, length);
     const bool dhcp = !ipv6 && NearlinkIpShareChannel::IsDhcpPacket(data, length);
     NearlinkIpShareChannel::DhcpPacket transaction{};
     if (dhcp && !NearlinkIpShareChannel::ParseDhcpPacket(data, length, transaction)) {
@@ -303,8 +339,8 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
             pending = transactions_.find(transactionKey);
         }
         if (!source && dhcp && transaction.message == 5 && pending != transactions_.end()) {
-            const uint8_t offered[] = {uint8_t(transaction.offered >> 24), uint8_t(transaction.offered >> 16),
-                                       uint8_t(transaction.offered >> 8), uint8_t(transaction.offered)};
+            const uint8_t offered[] = {static_cast<uint8_t>(transaction.offered >> 24), static_cast<uint8_t>(transaction.offered >> 16),
+                                       static_cast<uint8_t>(transaction.offered >> 8), static_cast<uint8_t>(transaction.offered)};
             auto existing = owners_.find(std::string(reinterpret_cast<const char *>(offered), sizeof(offered)));
             if (existing != owners_.end() && existing->second != pending->second.epoch) {
                 auto member = members_.find(existing->second);
@@ -318,13 +354,13 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
         }
         const uint8_t *destination = data + (ipv6 ? 24 : 16);
         auto owner = owners_.find(std::string(reinterpret_cast<const char *>(destination), ipv6 ? 16 : 4));
-        bool group = ipv6 ? destination[0] == 0xff : V4(destination) == 0xffffffff ||
+        bool group = ipv6 ? destination[0] == 0xff : ReadIpv4Address(destination) == 0xffffffff ||
                          (destination[0] >= 224 && destination[0] <= 239);
         // IPv4 directed broadcast depends on the authenticated source subnet.
         if (source && !ipv6) {
             std::lock_guard channelLock(source->mutex_);
             group = group || (source->subnetMask_ &&
-                V4(destination) == (source->boundIp_ | ~source->subnetMask_));
+                ReadIpv4Address(destination) == (source->boundIp_ | ~source->subnetMask_));
         }
         bool routerSolicitation = source && nd && data[nd] == 133;
         if (!dhcp && !group && owner != owners_.end()) {
@@ -349,7 +385,7 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
                         continue;
                     }
                     if (!source && !ipv6 && target->DhcpBoundLocked() && target->subnetMask_) {
-                        group = group || V4(destination) == (target->boundIp_ | ~target->subnetMask_);
+                        group = group || ReadIpv4Address(destination) == (target->boundIp_ | ~target->subnetMask_);
                     }
                 }
                 bool selected = dhcp ? pending != transactions_.end() && pending->second.epoch == targetEpoch &&
@@ -368,8 +404,8 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
                 local = !source->ipv6_.OnLink(destination, seconds) || IsLocalIpv6Locked(destination, now);
             } else {
                 bool onLink = source->subnetMask_ &&
-                    (V4(destination) & source->subnetMask_) == (source->boundIp_ & source->subnetMask_);
-                local = !onLink || V4(destination) == source->serverIp_;
+                    (ReadIpv4Address(destination) & source->subnetMask_) == (source->boundIp_ & source->subnetMask_);
+                local = !onLink || ReadIpv4Address(destination) == source->serverIp_;
             }
         }
         if (local) {
@@ -400,7 +436,9 @@ int32_t NearlinkIpShareLink::Dispatch(NearlinkIpShareChannel *source, const uint
         } else {
             ++dropped_;
         }
-        ReportLocked(ret == 0 ? "deliver" : "egress", target.epoch, pi);
+        if (ret != 0) {
+            ReportLocked("egress", target.epoch, pi);
+        }
     }
     return 0;
 }

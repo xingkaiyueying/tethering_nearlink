@@ -47,7 +47,6 @@ int32_t NearlinkIpShareStub::OnRemoteRequest(uint32_t code, MessageParcel &data,
                                              MessageOption &option)
 {
     if (code != NL_IPSHARE_GET_STATUS) {
-        HILOGI("[IpShare][IPC] server request received code=%{public}u", code);
     }
     CHECK_PERMISSION_AND_EXECUTE(NearlinkIpShareStub);
 }
@@ -65,7 +64,6 @@ int32_t NearlinkIpShareStub::IsPeerSupportedInner(NearlinkIpShareStub *stub, Mes
         HILOGE("[IpShare][IPC] support response write failed ret=%{public}d", ret);
         return TRANSACTION_ERR;
     }
-    HILOGI("[IpShare][IPC] support request handled ret=%{public}d supported=%{public}d", ret, supported);
     return NO_ERROR;
 }
 
@@ -111,7 +109,6 @@ int32_t NearlinkIpShareStub::StartTerminalInner(NearlinkIpShareStub *stub, Messa
         HILOGE("[IpShare][IPC] terminal response write failed ret=%{public}d", ret);
         return TRANSACTION_ERR;
     }
-    HILOGI("[IpShare][IPC] terminal request handled ret=%{public}d", ret);
     return NO_ERROR;
 }
 
@@ -123,7 +120,6 @@ int32_t NearlinkIpShareStub::StopInner(NearlinkIpShareStub *stub, MessageParcel 
         HILOGE("[IpShare][IPC] stop response write failed ret=%{public}d", ret);
         return TRANSACTION_ERR;
     }
-    HILOGI("[IpShare][IPC] stop request handled ret=%{public}d", ret);
     return NO_ERROR;
 }
 
@@ -155,7 +151,6 @@ int32_t NearlinkIpShareStub::RegisterObserverInner(NearlinkIpShareStub *stub, Me
         HILOGE("[IpShare][IPC] observer registration response write failed ret=%{public}d", ret);
         return TRANSACTION_ERR;
     }
-    HILOGI("[IpShare][IPC] observer registration handled ret=%{public}d", ret);
     return NO_ERROR;
 }
 
@@ -168,7 +163,6 @@ int32_t NearlinkIpShareStub::UnregisterObserverInner(NearlinkIpShareStub *stub, 
         HILOGE("[IpShare][IPC] observer unregistration response write failed ret=%{public}d", ret);
         return TRANSACTION_ERR;
     }
-    HILOGI("[IpShare][IPC] observer unregistration handled ret=%{public}d", ret);
     return NO_ERROR;
 }
 
