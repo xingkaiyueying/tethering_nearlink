@@ -42,9 +42,41 @@ static void Response(uint8_t opcode, uint8_t result, int transport = 0, uint8_t 
     NLSTK_SsapClientCallMethodResult_S reply = {5,{},ssapError,{8,bytes}};
     OnCallMethod(7,&reply,transport);
 }
+static bool VerifyGoldenVectors(void)
+{
+    static const uint8_t layer2[IPOSL_LAYER2_ID_LEN] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};
+    static const uint8_t configRequest[IPOSL_CONFIG_REQUEST_LEN] = {0x01, 0x02, 0x11, 0x22, 0x33, 0x44,
+                                                                    0x55, 0x05, 0xDC, 0x01, 0x01};
+    static const uint8_t openRequest[IPOSL_OPEN_REQUEST_LEN] = {0x02, 0x02, 0x11, 0x22, 0x33, 0x44, 0x55};
+    static const uint8_t configResponse[IPOSL_RESPONSE_LEN] = {0x01, 0x02, 0x11, 0x22, 0x33, 0x44, 0x55, 0x00};
+    uint8_t out[IPOSL_CONFIG_REQUEST_LEN] = {0};
+    uint8_t decodedLayer2[IPOSL_LAYER2_ID_LEN] = {0};
+    uint8_t opcode = 0;
+    uint8_t result = 0xFF;
+    if (IposlCodecEncodeConfigMode(layer2, IPOSL_IP_TYPE_IPV4, out, sizeof(out)) != (int32_t)sizeof(configRequest) ||
+        memcmp(out, configRequest, sizeof(configRequest)) != 0 ||
+        IposlCodecDecodeRequest(out, sizeof(configRequest), &opcode, decodedLayer2) != IPOSL_SUCCESS ||
+        opcode != IPOSL_OPCODE_CONFIGURE || memcmp(decodedLayer2, layer2, sizeof(layer2)) != 0) {
+        return false;
+    }
+    if (IposlCodecEncodeOpenRequest(layer2, out, sizeof(out)) != (int32_t)sizeof(openRequest) ||
+        memcmp(out, openRequest, sizeof(openRequest)) != 0 ||
+        IposlCodecDecodeRequest(out, sizeof(openRequest), &opcode, decodedLayer2) != IPOSL_SUCCESS ||
+        opcode != IPOSL_OPCODE_ENABLE) {
+        return false;
+    }
+    if (IposlCodecDecodeResponse(configResponse, sizeof(configResponse), IPOSL_OPCODE_CONFIGURE, decodedLayer2,
+                                 &result) != IPOSL_SUCCESS ||
+        result != 0) {
+        return false;
+    }
+    out[0] = 0x7F;
+    return IposlCodecDecodeRequest(out, 1, &opcode, decodedLayer2) == IPOSL_ERR_INVALID_PARAM;
+}
+
 int main()
 {
-    assert(IposlCodecVerifyGoldenVectors());
+    assert(VerifyGoldenVectors());
     Discover(); Capability(3); assert(methodCalls == 1 && g_selectedMode == 3 && prepared == 1 && capabilityUpdates == 1);
     Response(1,0); assert(methodCalls == 2 && g_expectedOpcode == 2);
     Response(2,0); assert(configured == 2 && lastMode == 3);

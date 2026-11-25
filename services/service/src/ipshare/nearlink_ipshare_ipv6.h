@@ -53,7 +53,9 @@ public:
     bool LocalUsable(const Address &address, bool terminal, uint64_t now);
     static bool AddLayer2Option(std::vector<uint8_t> &packet, const uint8_t sender[6]);
     void Expire(uint64_t now);
-    bool Authorize(const uint8_t *packet, size_t length, bool terminal, const uint8_t sender[6], uint64_t now);
+    bool OnLink(const uint8_t address[16], uint64_t now) const;
+    bool Authorize(const uint8_t *packet, size_t length, bool terminal, const uint8_t sender[6], uint64_t now,
+                   bool relayed = false);
 
 private:
     static uint16_t U16(const uint8_t *p);
@@ -74,14 +76,16 @@ private:
     bool ConfirmOwner(const Address &a, bool terminal, uint64_t now);
     bool LearnPrefix(const uint8_t *option, uint64_t now);
     bool Options(const uint8_t *p, size_t n, size_t offset, uint8_t type, bool unspecified, const uint8_t sender[6],
-                 uint64_t now);
-    bool Process(const uint8_t *p, size_t n, bool terminal, const uint8_t sender[6], uint64_t now);
-    bool ProcessNd(const uint8_t *p, size_t n, size_t offset, bool terminal, const uint8_t sender[6], uint64_t now);
+                 uint64_t now, bool relayed);
+    bool Process(const uint8_t *p, size_t n, bool terminal, const uint8_t sender[6], uint64_t now, bool relayed);
+    bool ProcessNd(const uint8_t *p, size_t n, size_t offset, bool terminal, const uint8_t sender[6], uint64_t now,
+                   bool relayed);
     bool ProcessData(const uint8_t *p, size_t n, size_t offset, uint8_t protocol, bool terminal);
     std::vector<Mapping> mappings_;
     std::vector<Prefix> prefixes_;
-    uint64_t rateUntil_{0};
-    uint32_t candidates_{0};
+    bool sharedLink_{false};
+    std::array<uint64_t, 2> rateUntil_{};
+    std::array<uint32_t, 2> candidates_{};
 };
 } // namespace OHOS::Nearlink
 #endif

@@ -50,7 +50,6 @@ int32_t NearlinkIpShareProxy::AddressCommand(uint32_t code, const std::string &a
     }
     int32_t ret = Transact(code, data, reply);
     ret = ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
-    HILOGI("[IpShare][IPC] address request completed code=%{public}u ret=%{public}d", code, ret);
     return ret;
 }
 
@@ -71,7 +70,6 @@ int32_t NearlinkIpShareProxy::IsPeerSupported(const std::string &peerAddress, bo
         HILOGE("[IpShare][IPC] support response unmarshal failed");
         return NL_ERR_IPC_TRANS_FAILED;
     }
-    HILOGI("[IpShare][IPC] support request completed ret=%{public}d supported=%{public}d", ret, supported);
     return ret;
 }
 
@@ -126,7 +124,6 @@ int32_t NearlinkIpShareProxy::Stop()
     }
     int32_t ret = Transact(NL_IPSHARE_STOP, data, reply);
     ret = ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
-    HILOGI("[IpShare][IPC] stop request completed ret=%{public}d", ret);
     return ret;
 }
 
@@ -171,7 +168,6 @@ int32_t NearlinkIpShareProxy::RegisterObserver(const sptr<INearlinkIpShareObserv
     }
     int32_t ret = Transact(NL_IPSHARE_REGISTER_OBSERVER, data, reply);
     ret = ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
-    HILOGI("[IpShare][IPC] observer registration completed ret=%{public}d", ret);
     return ret;
 }
 
@@ -185,7 +181,6 @@ int32_t NearlinkIpShareProxy::UnregisterObserver()
     }
     int32_t ret = Transact(NL_IPSHARE_UNREGISTER_OBSERVER, data, reply);
     ret = ret == NL_NO_ERROR ? reply.ReadInt32() : ret;
-    HILOGI("[IpShare][IPC] observer unregistration completed ret=%{public}d", ret);
     return ret;
 }
 

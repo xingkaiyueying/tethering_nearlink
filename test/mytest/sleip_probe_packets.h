@@ -7,6 +7,19 @@
 #include <string.h>
 #include "iposl_profile.h"
 
+static inline void TestLinkLocal(const uint8_t layer2[6], uint8_t address[16])
+{
+    memset(address, 0, 16);
+    address[0] = 0xfe;
+    address[1] = 0x80;
+    address[8] = layer2[0] ^ 2;
+    address[9] = layer2[1];
+    address[10] = layer2[2];
+    address[11] = 0xff;
+    address[12] = 0xfe;
+    memcpy(address + 13, layer2 + 3, 3);
+}
+
 /* Test traffic only: never install these addresses or a route in the system. */
 static void ProbePut16(uint8_t *p, uint16_t n) { p[0] = n >> 8; p[1] = n; }
 static uint16_t ProbeChecksum(const uint8_t *p, size_t length, uint32_t sum)
@@ -53,7 +66,7 @@ static void ProbeData(uint8_t p[1500], uint8_t pi, bool gateway, const uint8_t l
     if (pi == 1) ProbeIpv4(p, 1500, gateway);
     else {
         p[0] = 0x60; ProbePut16(p + 4, 1460); p[6] = 17; p[7] = 64;
-        IposlCodecS1LinkLocal(local, p + 8); IposlCodecS1LinkLocal(peer, p + 24);
+        TestLinkLocal(local, p + 8); TestLinkLocal(peer, p + 24);
     }
     ProbePut16(p + header, 30201); ProbePut16(p + header + 2, 30201);
     ProbePut16(p + header + 4, 1500 - header);

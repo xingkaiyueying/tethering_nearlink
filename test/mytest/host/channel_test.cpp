@@ -15,18 +15,27 @@ static int creates, destroys, tunWrites, sent;
 static uint8_t sentPi;
 static bool secure = true;
 static uint32_t destroyResult;
-extern "C" uint32_t QOSM_TransChannelCreate(const QOSM_TransChannelParams_S *) { ++creates; return 0; }
+extern "C" uint32_t QOSM_TransChannelCreate(const QOSM_TransChannelParams_S *params) {
+    assert(params->slqi == QOSM_TRANS_CHANNEL_SLQI_HIGH);
+    assert(params->frameType == QOSM_SLE_RADIO_FRAME_TYPE_2);
+    ++creates; return 0;
+}
 extern "C" uint32_t QOSM_TransChannelDestroy(const QOSM_TransChannelReleaseParams_S *) { ++destroys; return destroyResult; }
 extern "C" int32_t IposlProfileSendIp(uint16_t lcid, uint8_t tcid, uint8_t pi, const uint8_t *, uint16_t, uint64_t gen)
 {
     if (!OHOS::Nearlink::NearlinkIpShareService::CanSend(lcid, tcid, pi, gen)) return -1;
     ++sent; sentPi = pi; return 0;
 }
+extern "C" int32_t IposlProfileSendIpOnCp(uint16_t l,uint8_t t,uint8_t pi,const uint8_t *p,uint16_t n,uint64_t g)
+{ return IposlProfileSendIp(l,t,pi,p,n,g); }
 namespace OHOS::Nearlink {
 bool NearlinkIpShareService::CanSend(uint16_t l, uint8_t t, uint8_t p, uint64_t g)
 { return secure && NearlinkIpShareChannel::GetInstance().CanSend(l,t,p,g); }
+bool NearlinkIpShareTun::ReadLocalIpv6Addresses(uint32_t &index,
+    std::vector<std::array<uint8_t,16>> &addresses,const std::string &)
+{ index=7;addresses.clear();return true; }
 NearlinkIpShareTun::~NearlinkIpShareTun() {}
-int32_t NearlinkIpShareTun::Open(const PacketCallback &, const std::string &) { fd_ = 1; return 0; }
+int32_t NearlinkIpShareTun::Open(const PacketCallback &) { fd_ = 1; return 0; }
 void NearlinkIpShareTun::Close() { fd_ = -1; }
 int32_t NearlinkIpShareTun::Write(const uint8_t *, uint16_t) { ++tunWrites; return fd_ >= 0 ? 0 : -1; }
 bool NearlinkIpShareTun::IsOpen() const { return fd_ >= 0; }
@@ -84,7 +93,7 @@ int main()
 
     // The S1 fixed endpoints require the same DAD/first-source authorization as every S2 address.
     uint8_t peerLla[16], localLla[16];
-    IposlCodecS1LinkLocal(peer, peerLla); IposlCodecS1LinkLocal(local, localLla);
+    TestLinkLocal(peer, peerLla); TestLinkLocal(local, localLla);
     Address peerAddr{}, localAddr{};
     std::copy(peerLla, peerLla + 16, peerAddr.begin());
     std::copy(localLla, localLla + 16, localAddr.begin());

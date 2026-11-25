@@ -29,6 +29,7 @@
 
 namespace OHOS::Nearlink {
 class NearlinkIpShareChannel;
+class NearlinkIpShareLink;
 
 class NEARLINK_API NearlinkIpShareService final {
 public:
@@ -94,6 +95,7 @@ private:
     GatewayPeer *FindGatewayPeerLocked(const uint8_t peer[6]) const;
     NearlinkIpShareCapabilities capabilities_;
     std::vector<std::unique_ptr<GatewayPeer>> gatewayPeers_;
+    std::shared_ptr<NearlinkIpShareLink> gatewayLink_;
     bool gatewayAny_{false};
     int32_t maxTerminals_{0};
     uint64_t generationCounter_{0};

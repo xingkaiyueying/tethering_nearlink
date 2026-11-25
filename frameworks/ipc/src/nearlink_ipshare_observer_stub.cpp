@@ -37,8 +37,6 @@ int32_t NearlinkIpShareObserverStub::OnRemoteRequest(uint32_t code, MessageParce
         HILOGE("[IpShare][Observer] status notification rejected: parcel missing");
         return TRANSACTION_ERR;
     }
-    HILOGI("[IpShare][Observer] status received role=%{public}d state=%{public}d error=%{public}d",
-           static_cast<int32_t>(status->role), static_cast<int32_t>(status->state), status->errorCode);
     OnStatusChanged(*status);
     return NO_ERROR;
 }
